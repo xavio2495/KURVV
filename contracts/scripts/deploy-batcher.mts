@@ -1,0 +1,10 @@
+import { account, artifact, pub, wallet } from "./lib.mts";
+const { abi, bytecode } = artifact("BatchExecutor");
+const hash = await wallet.deployContract({ abi, bytecode, account, chain: null, args: [] });
+const rc = await pub.waitForTransactionReceipt({ hash });
+if (rc.status !== "success" || !rc.contractAddress) throw new Error("deploy failed");
+console.log(`BatchExecutor ${rc.contractAddress}  gas ${rc.gasUsed.toLocaleString()}`);
+const code = await pub.getCode({ address: rc.contractAddress });
+if (!code || code === "0x") throw new Error("no code at deployed address");
+console.log(`verified: ${code.length} bytes of code present`);
+console.log(`export BATCHER=${rc.contractAddress}`);
