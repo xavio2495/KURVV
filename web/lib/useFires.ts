@@ -53,7 +53,12 @@ export function useFires(
 
     let stop = false;
 
-    const ingest = (batch: Fire[]) => {
+    /**
+     * @param replay the one-off backfill at mount. Settlements found there are
+     *   recorded but NOT announced: a reload must not re-flash money that landed
+     *   minutes ago. A flash means "this just happened", or it means nothing.
+     */
+    const ingest = (batch: Fire[], replay = false) => {
       const fresh = batch.filter((f) => !seen.current.has(f.hash));
       for (const f of fresh) seen.current.add(f.hash);
       for (const f of batch) {
@@ -64,7 +69,7 @@ export function useFires(
           if (e.name === "LegSettled" && e.planId === planId && e.legIndex !== undefined
               && !settled.current.has(e.legIndex)) {
             settled.current.add(e.legIndex);
-            settledCb.current?.(e.legIndex, e.paidToOwner ?? 0n);
+            if (!replay) settledCb.current?.(e.legIndex, e.paidToOwner ?? 0n);
           }
         }
       }
@@ -87,7 +92,7 @@ export function useFires(
           setScanning(true);
           const batch = await readFires(planBook, planId, from, head);
           if (stop) return;
-          ingest(batch);
+          ingest(batch, true);
           cursor.current = head;
         } else if (head > cursor.current) {
           const batch = await readFires(planBook, planId, cursor.current + 1n, head);

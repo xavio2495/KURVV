@@ -89,10 +89,11 @@ export function AutonomyPanel({ planBook, signer, commitTx, feed, clock, planId 
       </div>
 
       <div className="auto-key">
-        <span className="swatch val" /> <code>from == to == the PlanBook contract</code> — a contract holds no
-        private key, so no wallet could have produced this. Validators assembled it when the
-        subscription filter matched. &nbsp;
-        <span className="swatch human" /> <code>from</code> = a wallet — the one transaction a person signed.
+        <span className="swatch val" /> <code>from == to == {planBook ?? "the PlanBook"}</code> — the Plan contract
+        itself. A contract holds no private key, so no wallet could have produced this: validators
+        assembled it when the subscription filter matched. &nbsp;
+        <span className="swatch human" /> <code>from</code> = a wallet address — the one transaction a
+        person signed.
       </div>
 
       {feed.error && <div className="err">log scan failed — {feed.error}</div>}
@@ -123,8 +124,8 @@ export function AutonomyPanel({ planBook, signer, commitTx, feed, clock, planId 
             <div className="fire-to mono dim">
               to&nbsp;&nbsp;{f.to ?? "—"}
               {f.synthetic && planBook && f.to?.toLowerCase() === planBook.toLowerCase()
-                ? "  ← same address. The contract sent this to itself; no key was involved."
-                : "  ← a wallet signed this one."}
+                ? "  ← the same contract. It has no private key; validators assembled this."
+                : "  ← your own wallet. Same address because approve + commit are batched under EIP-7702 — but a key signed it."}
             </div>
 
             <div className={`fire-sum ${f.synthetic ? "" : "human"}`}>{f.summary}</div>

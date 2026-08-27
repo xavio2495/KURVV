@@ -66,7 +66,8 @@ export function useWindowClock(venue: Venue): WindowClock {
       try {
         const head = await pub.getBlockNumber();
         const r = await lastRoll(venue.marketCreator, venue.rollTopic, venue.seriesId, head);
-        if (!stop && r) setAnchor((a) => (a && a.at >= r.timestamp ? a : { at: r.timestamp, source: "roll event" }));
+        // Wins ties against the indexer seed: same instant, more direct provenance.
+        if (!stop && r) setAnchor((a) => (a && a.at > r.timestamp ? a : { at: r.timestamp, source: "roll event" }));
       } catch { /* keep the last good anchor on screen */ }
     };
     void scan();
