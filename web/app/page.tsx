@@ -221,8 +221,9 @@ export default function Page() {
       setTx(hash);
       const id = Number(await pub.readContract({ address: PLAN_BOOK, abi: planBookAbi, functionName: "planCount" })) - 1;
       planStartRef.current = built.market.tradingStart;
+      setPlanStart(built.market.tradingStart);
       setPlanId(id);
-      save({ planId: id, planStart: built.market.tradingStart, drawn, venueKey, legCount, total: String(total) });
+      save({ planId: id, planStart: built.market.tradingStart, drawn, venueKey, legCount, total: String(total), tx: hash });
       await refreshAccount();
     } catch (e) { setErr((e as Error).message.split("\n").slice(0, 3).join("\n")); } finally { setBusy(null); }
   };
@@ -234,7 +235,7 @@ export default function Page() {
       const h = await local.send({ to: PLAN_BOOK, value: 0n,
         data: encodeFunctionData({ abi: planBookAbi, functionName: "cancelPlan", args: [BigInt(planId)] }) });
       await pub.waitForTransactionReceipt({ hash: h });
-      clearSaved(); setPlanId(null); setTx(null);
+      clearSaved(); setPlanId(null); setPlanStart(null); setTx(null);
       await refreshAccount();
     } catch (e) { setErr((e as Error).message.split("\n")[0]); } finally { setBusy(null); }
   };
@@ -261,10 +262,11 @@ export default function Page() {
       <div className="cols">
         <div>
           <Canvas
-            priceRef={priceRef} legsRef={legsRef} drawnRef={drawnRef}
+            priceRef={priceRef} legsRef={legsRef} drawnRef={drawnRef} flashRef={flashRef}
             horizonSec={horizon} drawingEnabled={!busy && planId === null}
             onStrokeEnd={onStrokeEnd}
           />
+          <WindowClock venue={venue} clock={clock} />
           <div className="bar">
             <label className="dim">Window</label>
             <select value={venueKey} onChange={(e) => setVenueKey(e.target.value as Venue["key"])}>
@@ -325,7 +327,7 @@ export default function Page() {
                 </button>
                 <button className="danger ghost" onClick={cancel} disabled={planId === null || !!busy}>Cancel Plan</button>
                 {planId !== null && (
-                  <button className="ghost" onClick={() => { clearSaved(); setPlanId(null); setTx(null); setDrawn([]); drawnRef.current = []; legsRef.current = []; setLegs([]); setPreview(null); }} disabled={!!busy}>New</button>
+                  <button className="ghost" onClick={() => { clearSaved(); setPlanId(null); setPlanStart(null); setTx(null); setDrawn([]); drawnRef.current = []; legsRef.current = []; flashRef.current = []; setLegs([]); setPreview(null); }} disabled={!!busy}>New</button>
                 )}
               </div>
               {tx && <div className="ok" style={{ marginTop: 8 }}>
@@ -336,6 +338,15 @@ export default function Page() {
           )}
         </div>
       </div>
+
+      <AutonomyPanel
+        planBook={PLAN_BOOK || undefined}
+        signer={local.address ?? undefined}
+        commitTx={tx}
+        feed={feed}
+        clock={clock}
+        planId={planId}
+      />
     </div>
   );
 }

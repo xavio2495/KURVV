@@ -37,3 +37,74 @@ td { padding: 4px 0; border-top: 1px solid #14181e; }
 .ok { color: #22c55e; font-size: 12px; }
 input[type=range] { accent-color: #f0a030; }
 select { background: #151920; color: #e8eaed; border: 1px solid #2a2f38; border-radius: 8px; padding: 6px 9px; font: inherit; }
+
+/* ── Window clock ──────────────────────────────────────────────────────────── */
+.wclock { border: 1px solid #1c2027; border-radius: 12px; background: #0b0d10; padding: 11px 13px 13px; margin: 14px 0; }
+.wclock-head, .wclock-foot { display: flex; gap: 12px; align-items: center; }
+.wclock-title { font-size: 11px; letter-spacing: .1em; color: #8b9199; font-weight: 600; }
+.wclock-bar { position: relative; height: 26px; margin: 10px 0 22px; border-radius: 6px;
+  background: #12161c; border: 1px solid #1c2027; overflow: visible; }
+.wclock-fill { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg,#1a2430,#243447);
+  border-radius: 5px 0 0 5px; transition: width .18s linear; }
+.wclock-mark { position: absolute; top: -3px; bottom: -3px; width: 2px; background: #f0a030; opacity: .55; }
+.wclock-mark.done { opacity: 1; box-shadow: 0 0 8px #f0a030; }
+.wclock-play { position: absolute; top: -5px; bottom: -5px; width: 2px; background: #e8eaed;
+  box-shadow: 0 0 10px rgba(232,234,237,.8); transition: left .18s linear; }
+.wclock-lab { position: absolute; top: 30px; font-size: 10px; font-family: ui-monospace, Menlo, monospace;
+  white-space: nowrap; transform: translateX(-50%); }
+.wclock-lab.open { color: #f0a030; }
+.wclock-lab.end { right: 0; transform: none; color: #8b9199; }
+.wclock-foot b { color: #e8eaed; }
+.wclock-foot b.acc { color: #f0a030; }
+
+/* ── Proof of autonomy ─────────────────────────────────────────────────────── */
+.auto { margin-top: 18px; border: 1px solid #1c2027; border-radius: 12px; background: #0b0d10; padding: 16px 18px 18px; }
+.auto-head { display: flex; gap: 12px; align-items: baseline; margin-bottom: 14px; }
+.auto h3 { margin: 0; font-size: 12px; letter-spacing: .12em; color: #e8eaed; font-weight: 700; }
+.auto code { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: #cbd2da;
+  background: #12161c; border: 1px solid #1c2027; border-radius: 4px; padding: 1px 5px; }
+
+.auto-top { display: flex; gap: 16px; flex-wrap: wrap; align-items: stretch; margin-bottom: 14px; }
+.tally { display: flex; align-items: center; gap: 14px; flex: 1 1 340px;
+  border: 1px solid #1c2027; border-radius: 10px; background: #0e1116; padding: 12px 18px; }
+.tally-cell { flex: 1; }
+.tally-n { font-family: ui-monospace, Menlo, monospace; font-size: 34px; line-height: 1; font-weight: 700; }
+.tally-l { font-size: 11px; letter-spacing: .06em; color: #8b9199; margin-top: 5px; }
+.tally-cell.human .tally-n { color: #f0a030; }
+.tally-cell.val .tally-n { color: #6ee7a8; }
+.tally-x { color: #454b55; font-size: 20px; }
+
+.cdown { flex: 0 1 260px; border: 1px solid #24303a; border-radius: 10px; background: #0e1419; padding: 12px 18px; }
+.cdown-l { font-size: 10px; letter-spacing: .12em; color: #8b9199; }
+.cdown-n { font-family: ui-monospace, Menlo, monospace; font-size: 38px; line-height: 1.05;
+  font-weight: 700; color: #6ee7a8; letter-spacing: .02em; }
+.cdown-s { font-size: 10px; margin-top: 3px; }
+
+.auto-key { font-size: 11.5px; color: #8b9199; line-height: 1.7; border-left: 2px solid #1c2027;
+  padding-left: 11px; margin-bottom: 14px; }
+.swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; vertical-align: baseline; }
+.swatch.val { background: #6ee7a8; }
+.swatch.human { background: #f0a030; }
+
+.fires { display: flex; flex-direction: column; gap: 8px; max-height: 460px; overflow-y: auto; }
+.fire { border: 1px solid #1c2027; border-left-width: 3px; border-radius: 8px; background: #0e1116; padding: 9px 12px 10px; }
+.fire.val { border-left-color: #6ee7a8; }
+.fire.human { border-left-color: #f0a030; background: #14100a; }
+.fire-top { display: flex; gap: 10px; align-items: center; font-size: 11px; }
+.badge { font-size: 9.5px; letter-spacing: .11em; font-weight: 700; padding: 2px 7px; border-radius: 3px; }
+.badge.val { background: rgba(110,231,168,.14); color: #6ee7a8; border: 1px solid rgba(110,231,168,.35); }
+.badge.human { background: rgba(240,160,48,.14); color: #f0a030; border: 1px solid rgba(240,160,48,.4); }
+
+/* `from` IS the proof — it gets the largest type and the only boxed treatment. */
+.fire-from { display: flex; align-items: baseline; gap: 10px; margin: 7px 0 2px; }
+.fire-from .k { font-size: 10px; letter-spacing: .14em; color: #6b7280; text-transform: uppercase; }
+.fire-from .v { font-size: 15.5px; font-weight: 700; letter-spacing: -.01em; word-break: break-all; }
+.fire.val .fire-from .v { color: #6ee7a8; text-shadow: 0 0 14px rgba(110,231,168,.28); }
+.fire.human .fire-from .v { color: #f0a030; }
+.fire-to { font-size: 11px; }
+.fire-sum { font-size: 12.5px; color: #e8eaed; margin: 7px 0 5px; }
+.fire-sum.human { color: #f0a030; }
+.fire-foot { display: flex; gap: 16px; font-size: 11px; flex-wrap: wrap; }
+.fire-foot a { color: #8b9199; }
+.fire-foot a:hover { color: #e8eaed; }
+.auto-foot { font-size: 11.5px; margin-top: 12px; }
