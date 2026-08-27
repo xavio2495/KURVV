@@ -1,7 +1,66 @@
-node_modules/
-contracts/artifacts/
-contracts/cache/
-contracts/typechain-types/
+# KURVV — repository ignore rules.
+#
+# The signing key for the funded Shannon testnet wallet lives in
+# scripts/probe/.env.local. Nothing under this file's secret rules may ever be
+# committed. Verify additions with:  git check-ignore -v <path>
+
+# ---------------------------------------------------------------- secrets ---
+# Environment files. .env.example is the one exception: it is a template that
+# must be committable, so it is negated below.
 .env
-.env.local
+.env.*
+!.env.example
+!.env.*.example
+
+# Raw keys, keystores, certificates, mnemonics.
+*.key
+*.pem
+*.p12
+*.pfx
+*.keystore
+*.mnemonic
+keystore/
+keystores/
+UTC--*
+id_rsa
+id_rsa.*
+id_ecdsa
+id_ed25519
+id_ed25519.*
+
+# ---------------------------------------------------- build / dependencies ---
+node_modules/
 .next/
+out/
+dist/
+build/
+coverage/
+artifacts/
+cache/
+typechain-types/
+*.tsbuildinfo
+
+# ------------------------------------------------------- run + scratch output ---
+# Soak and probe runs write transaction traces here. They are evidence for a
+# session, not repository content.
+*.log
+soak*.log
+soak*.stdout
+*.out
+scratch/
+tmp/
+*.tmp
+
+# Screenshots and recordings captured while demoing. Named narrowly so a real
+# committed asset (a logo, a diagram) is never swept up by mistake.
+screenshots/
+recordings/
+Screenshot*.png
+Screen?Recording*.mov
+Screen?Recording*.mp4
+
+# ------------------------------------------------------------------ editor ---
+.DS_Store
+.vscode/
+.idea/
+*.swp

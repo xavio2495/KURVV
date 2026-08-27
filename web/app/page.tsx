@@ -1,15 +1,20 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { encodeFunctionData, type Address } from "viem";
+import { encodeFunctionData, type Address, type Hex } from "viem";
 import { Canvas } from "../components/Canvas";
+import { AutonomyPanel } from "../components/AutonomyPanel";
+import { WindowClock } from "../components/WindowClock";
 import { curveToPlan, type CurvePoint, type Leg } from "../lib/curve";
-import { buildCommit, liveMarket, rollPriceSeries, PLAN_BOOK } from "../lib/commit";
+import { buildCommit, rollPriceSeries, PLAN_BOOK } from "../lib/commit";
 import { VENUES, ADDR, EXPLORER, type Venue } from "../lib/venues";
 import { erc20Abi, planBookAbi, moduleAbi, marketAbi } from "../lib/abi";
 import { pub, fmtUsdc, fmtStt } from "../lib/chain";
 import { createLocalAdapter } from "../lib/wallet/local";
+import { useFires } from "../lib/useFires";
+import { useWindowClock } from "../lib/useWindowClock";
 import type { LegView, PricePoint } from "../lib/render/types";
 import type { DrawnPoint } from "../lib/render/curve";
+import { pruneFlashes, type Flash } from "../lib/render/flash";
 
 const TOTAL_CHOICES = [1_000_000n, 2_000_000n, 5_000_000n];
 
@@ -19,7 +24,7 @@ const TOTAL_CHOICES = [1_000_000n, 2_000_000n, 5_000_000n];
  * an empty canvas and no way back to it.
  */
 const SAVE_KEY = "kurvv.activePlan.v1";
-interface Saved { planId: number; planStart: number; drawn: DrawnPoint[]; venueKey: Venue["key"]; legCount: number; total: string }
+interface Saved { planId: number; planStart: number; drawn: DrawnPoint[]; venueKey: Venue["key"]; legCount: number; total: string; tx?: Hex }
 const save = (v: Saved) => { try { localStorage.setItem(SAVE_KEY, JSON.stringify(v)); } catch {} };
 const load = (): Saved | null => { try { return JSON.parse(localStorage.getItem(SAVE_KEY) ?? "null"); } catch { return null; } };
 const clearSaved = () => { try { localStorage.removeItem(SAVE_KEY); } catch {} };
@@ -35,8 +40,9 @@ export default function Page() {
   const [preview, setPreview] = useState<Leg[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [tx, setTx] = useState<string | null>(null);
+  const [tx, setTx] = useState<Hex | null>(null);
   const [planId, setPlanId] = useState<number | null>(null);
+  const [planStart, setPlanStart] = useState<number | null>(null);
   const [delegated, setDelegated] = useState<boolean | null>(null);
   const [bal, setBal] = useState<{ stt: bigint; usdc: bigint } | null>(null);
   const [legs, setLegs] = useState<LegView[]>([]);
@@ -45,9 +51,24 @@ export default function Page() {
   const priceRef = useRef<PricePoint[]>([]);
   const legsRef = useRef<LegView[]>([]);
   const drawnRef = useRef<DrawnPoint[]>([]);
+  /** Payouts landing on the canvas. Read by the rAF loop, never by React. */
+  const flashRef = useRef<Flash[]>([]);
   /** Fixed anchor for Leg bands. Without it they re-derive from `now` each poll and slide. */
   const planStartRef = useRef<number | null>(null);
   const horizon = legCount * venue.intervalSec;
+
+  const clock = useWindowClock(venue);
+
+  /**
+   * A settled Leg is the emotional core, so it gets the canvas, not a table cell.
+   * `paidToOwner` comes straight off the `LegSettled` log — collateral that has
+   * already reached the wallet, not a projection.
+   */
+  const onSettled = useCallback((legIndex: number, paidToOwner: bigint) => {
+    flashRef.current = [...pruneFlashes(flashRef.current), { legIndex, amount: paidToOwner, at: Date.now() }];
+  }, []);
+
+  const feed = useFires(PLAN_BOOK || undefined, planId, planStart, onSettled);
 
   // ── balances, delegation, dry-run flag ────────────────────────────────────
   const refreshAccount = useCallback(async () => {
@@ -84,6 +105,8 @@ export default function Page() {
         planStartRef.current = saved.planStart;
         setPreview(curveToPlan(saved.drawn.map((p) => ({ x: p.x, y: p.y })),
           { legCount: saved.legCount, totalStake: BigInt(saved.total), minWeightShare: 0.05 }));
+        setPlanStart(saved.planStart);
+        if (saved.tx) setTx(saved.tx);
         setPlanId(saved.planId);
       } catch { clearSaved(); }
     })();
