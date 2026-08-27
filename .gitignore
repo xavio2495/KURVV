@@ -4,3 +4,4 @@ contracts/cache/
 contracts/typechain-types/
 .env
 .env.local
+.next/
