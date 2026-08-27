@@ -28,7 +28,7 @@ export function createLocalAdapter(): WalletAdapter {
     },
     sendBatch: async (calls: BatchCall[]) => {
       if (!wallet || !account) throw new Error("local key not configured");
-      return sendBatchVia7702(wallet, account.address, calls);
+      return sendBatchVia7702(wallet, account, calls); // the ACCOUNT, so viem signs locally
     },
   };
 }

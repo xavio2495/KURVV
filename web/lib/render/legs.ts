@@ -32,18 +32,21 @@ export function renderLegs(ctx: CanvasRenderingContext2D, vp: Viewport, legs: Le
     ctx.lineWidth = leg.state === "pending" || leg.state === "skipped" ? 1 : 1.5;
     ctx.beginPath(); ctx.moveTo(x0, 0); ctx.lineTo(x0, vp.plotH); ctx.stroke();
 
-    ctx.textAlign = "left";
-    ctx.fillStyle = EDGE[leg.state];
-    const arrow = leg.direction === "UP" ? "▲" : "▼";
-    ctx.fillText(`${arrow} ${(Number(leg.stake) / 1e6).toFixed(2)}`, x0 + 4, 4);
+    // Only label a band wide enough to hold the text, else they collide illegibly.
+    if (w >= 46) {
+      ctx.textAlign = "left";
+      ctx.fillStyle = EDGE[leg.state];
+      const arrow = leg.direction === "UP" ? "▲" : "▼";
+      ctx.fillText(`${arrow}${(Number(leg.stake) / 1e6).toFixed(2)}`, x0 + 4, 5);
 
-    // Money landing mid-Plan is the emotional core — make it unmissable.
-    if (leg.paid !== undefined && leg.paid > 0n) {
-      ctx.fillStyle = "#22c55e";
-      ctx.fillText(`+${(Number(leg.paid) / 1e6).toFixed(3)}`, x0 + 4, 17);
-    } else if (leg.state === "lost") {
-      ctx.fillStyle = "rgba(239,68,68,0.85)";
-      ctx.fillText("0.000", x0 + 4, 17);
+      // Money landing mid-Plan is the emotional core — make it unmissable.
+      if (leg.paid !== undefined && leg.paid > 0n) {
+        ctx.fillStyle = "#22c55e";
+        ctx.fillText(`+${(Number(leg.paid) / 1e6).toFixed(3)}`, x0 + 4, 18);
+      } else if (leg.state === "lost") {
+        ctx.fillStyle = "rgba(239,68,68,0.8)";
+        ctx.fillText("0.000", x0 + 4, 18);
+      }
     }
   }
   ctx.restore();

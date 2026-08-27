@@ -1,4 +1,4 @@
-import { encodeFunctionData, type Address, type Hex, type WalletClient } from "viem";
+import { encodeFunctionData, type Account, type Address, type Hex, type WalletClient } from "viem";
 import { batchExecutorAbi } from "../abi";
 import { pub } from "../chain";
 import type { BatchCall } from "./types";
@@ -26,15 +26,23 @@ export async function isDelegatedTo(account: Address, delegate = BATCH_EXECUTOR)
  */
 export async function sendBatchVia7702(
   wallet: WalletClient,
-  account: Address,
+  /**
+   * Pass the ACCOUNT, not just its address. A bare address is a JSON-RPC account, so
+   * viem routes to `eth_sendTransaction` — which a plain HTTP transport does not
+   * serve, and the commit fails with "method does not exist". A local account object
+   * makes viem sign locally and use `eth_sendRawTransaction`. The Privy adapter DOES
+   * pass an address, because its injected provider serves `eth_sendTransaction`.
+   */
+  account: Account | Address,
   calls: BatchCall[],
   firstCommitGas = 12_000_000n,
 ): Promise<Hex> {
   const data = encodeFunctionData({ abi: batchExecutorAbi, functionName: "execute", args: [calls] });
-  const already = await isDelegatedTo(account);
+  const addr = (typeof account === "string" ? account : account.address) as Address;
+  const already = await isDelegatedTo(addr);
 
   if (already) {
-    return wallet.sendTransaction({ account, chain: null, to: account, data } as never);
+    return wallet.sendTransaction({ account, chain: null, to: addr, data } as never);
   }
 
   const authorization = await wallet.signAuthorization({
@@ -42,7 +50,7 @@ export async function sendBatchVia7702(
   } as never);
 
   return wallet.sendTransaction({
-    account, chain: null, to: account, data,
+    account, chain: null, to: addr, data,
     authorizationList: [authorization],
     gas: firstCommitGas, // see above — must not be estimated
   } as never);

@@ -34,6 +34,8 @@ export default function Page() {
   const priceRef = useRef<PricePoint[]>([]);
   const legsRef = useRef<LegView[]>([]);
   const drawnRef = useRef<DrawnPoint[]>([]);
+  /** Fixed anchor for Leg bands. Without it they re-derive from `now` each poll and slide. */
+  const planStartRef = useRef<number | null>(null);
   const horizon = legCount * venue.intervalSec;
 
   // ── balances, delegation, dry-run flag ────────────────────────────────────
@@ -83,7 +85,8 @@ export default function Page() {
           const l = await pub.readContract({ address: PLAN_BOOK, abi: planBookAbi, functionName: "getLeg", args: [BigInt(planId), i] }) as {
             direction: number; state: number; entryPrice: number; stake: bigint; filled: bigint; marketId: `0x${string}`;
           };
-          const start = now + (i - 0) * venue.intervalSec;
+          const anchor = planStartRef.current ?? now;
+          const start = anchor + i * venue.intervalSec;
           out.push({
             index: i,
             direction: l.direction === 0 ? "UP" : "DOWN",
@@ -139,6 +142,7 @@ export default function Page() {
       if (rc.status !== "success") throw new Error(`transaction reverted — ${EXPLORER}/tx/${hash}`);
       setTx(hash);
       const id = Number(await pub.readContract({ address: PLAN_BOOK, abi: planBookAbi, functionName: "planCount" })) - 1;
+      planStartRef.current = built.market.tradingStart;
       setPlanId(id);
       await refreshAccount();
     } catch (e) { setErr((e as Error).message.split("\n").slice(0, 3).join("\n")); } finally { setBusy(null); }
