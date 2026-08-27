@@ -21,7 +21,34 @@ export const ADDR = {
 } as const satisfies Record<string, Address>;
 
 export const INDEXER = "https://dev.smk.somnia.host/v1/graphql";
-export const VENUE = "0x679795a0195a1b76cdebb7c51d74e058aee92919b8c3389af86ef24535e8a28c";
+
+/**
+ * The two live venues. Both put seriesId in topic[1] and the successor marketId in
+ * topic[2] of their roll event, so one filter shape serves both — only topic[0] and
+ * the MarketCreator differ.
+ */
+export const VENUES = {
+  rolling: {
+    venueId: "0x679795a0195a1b76cdebb7c51d74e058aee92919b8c3389af86ef24535e8a28c",
+    marketCreator: "0x94d963b6670ab96e78c8d0c46ca35d196d606efe" as Address,
+    rollTopic: "0x2f81a5d8c4d5d43e0ba57b7ee38e6a5ac6799dd18f58f377d1fc8359d6a27eee" as `0x${string}`,
+    series: { BTC900: 1, ETH900: 2, BTC3600: 3, ETH3600: 5 },
+    openDelay: 45,
+    minHeadroom: 120,
+  },
+  fast: {
+    venueId: "0x1a1e6821cde7d0159c0d293177871e09677b4e42307c7db3ba94f8648a5a050f",
+    marketCreator: "0xee3aff92812a2cb7bf801b500687bc97b55cab34" as Address,
+    rollTopic: "0x2aba9c4149d9b680f88b57880776a6aa9755ec19e418a1e64831b44c43cb7a1b" as `0x${string}`,
+    series: { BTC300: 1, ETH300: 2, BTC60: 3, ETH60: 4 },
+    // Maker's first quotes land ~10s after tradingStart on BOTH venues; the book
+    // then stays live until ~1s before expiry. A 60s Window is usable +10s..+55s.
+    openDelay: 22,
+    minHeadroom: 12,
+  },
+} as const;
+
+export const VENUE = VENUES.rolling.venueId;
 export const SERIES_BTC_15M = 1;
 
 const raw = process.env.PROBE_PRIVATE_KEY?.trim().replace(/^["']|["']$/g, "");
@@ -58,9 +85,16 @@ export interface LiveMarket {
 
 /** The currently-Trading BTC 15m market with at least `minHeadroom` seconds left. */
 export async function liveBtc15m(minHeadroom = 150): Promise<LiveMarket | null> {
+  return liveMarket(VENUE, "BTC", 900, minHeadroom);
+}
+
+/** The currently-Trading market for a (venue, asset, interval) with headroom left. */
+export async function liveMarket(
+  venueId: string, asset: string, intervalSec: number, minHeadroom: number,
+): Promise<LiveMarket | null> {
   const cutoff = Math.floor(Date.now() / 1000) + minHeadroom;
   const d = await gql<{ Market: any[] }>(`{ Market(where:{
-      venueId:{_eq:"${VENUE}"}, asset:{_eq:"BTC"}, intervalSec:{_eq:"900"},
+      venueId:{_eq:"${venueId}"}, asset:{_eq:"${asset}"}, intervalSec:{_eq:"${intervalSec}"},
       finalized:{_eq:false}, expiry:{_gt:"${cutoff}"}
     }, order_by:{expiry:asc}, limit:1){ marketId poolAddress expiry tradingStart } }`);
   const m = d.Market[0];
