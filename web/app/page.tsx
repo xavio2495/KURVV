@@ -5,13 +5,24 @@ import { Canvas } from "../components/Canvas";
 import { curveToPlan, type CurvePoint, type Leg } from "../lib/curve";
 import { buildCommit, liveMarket, rollPriceSeries, PLAN_BOOK } from "../lib/commit";
 import { VENUES, ADDR, EXPLORER, type Venue } from "../lib/venues";
-import { erc20Abi, planBookAbi, LEG_STATE, SKIP_REASON } from "../lib/abi";
+import { erc20Abi, planBookAbi, moduleAbi, marketAbi } from "../lib/abi";
 import { pub, fmtUsdc, fmtStt } from "../lib/chain";
 import { createLocalAdapter } from "../lib/wallet/local";
 import type { LegView, PricePoint } from "../lib/render/types";
 import type { DrawnPoint } from "../lib/render/curve";
 
 const TOTAL_CHOICES = [1_000_000n, 2_000_000n, 5_000_000n];
+
+/**
+ * A running Plan outlives the page. Without this, a reload — or a hot reload while
+ * filming — drops a Plan that is still chaining on-chain, and the user is left with
+ * an empty canvas and no way back to it.
+ */
+const SAVE_KEY = "kurvv.activePlan.v1";
+interface Saved { planId: number; planStart: number; drawn: DrawnPoint[]; venueKey: Venue["key"]; legCount: number; total: string }
+const save = (v: Saved) => { try { localStorage.setItem(SAVE_KEY, JSON.stringify(v)); } catch {} };
+const load = (): Saved | null => { try { return JSON.parse(localStorage.getItem(SAVE_KEY) ?? "null"); } catch { return null; } };
+const clearSaved = () => { try { localStorage.removeItem(SAVE_KEY); } catch {} };
 
 export default function Page() {
   const local = useMemo(() => createLocalAdapter(), []);
@@ -57,6 +68,28 @@ export default function Page() {
 
   useEffect(() => { void refreshAccount(); const t = setInterval(refreshAccount, 8000); return () => clearInterval(t); }, [refreshAccount]);
 
+  // ── restore a Plan that is still running ──────────────────────────────────
+  useEffect(() => {
+    const saved = load();
+    if (!saved || !PLAN_BOOK) return;
+    (async () => {
+      try {
+        const sch = await pub.readContract({ address: PLAN_BOOK, abi: planBookAbi, functionName: "schedules", args: [BigInt(saved.planId)] }) as unknown as unknown[];
+        if (!sch || (sch[0] as string) === "0x0000000000000000000000000000000000000000") { clearSaved(); return; }
+        setVenueKey(saved.venueKey);
+        setLegCount(saved.legCount);
+        setTotal(BigInt(saved.total));
+        setDrawn(saved.drawn);
+        drawnRef.current = saved.drawn;
+        planStartRef.current = saved.planStart;
+        setPreview(curveToPlan(saved.drawn.map((p) => ({ x: p.x, y: p.y })),
+          { legCount: saved.legCount, totalStake: BigInt(saved.total), minWeightShare: 0.05 }));
+        setPlanId(saved.planId);
+      } catch { clearSaved(); }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ── on-chain price series: each rolled Window's settlement reference ───────
   useEffect(() => {
     let stop = false;
@@ -79,6 +112,12 @@ export default function Page() {
     const poll = async () => {
       try {
         const n = Number(await pub.readContract({ address: PLAN_BOOK, abi: planBookAbi, functionName: "legCount", args: [BigInt(planId)] }));
+
+        // A settled Leg is `Settled` whether it won or lost — the struct does not record
+        // the outcome. Deriving it from the market's payout VECTOR keeps this to plain
+        // chain reads: `getLogs` cannot help here because this RPC caps ranges at 1000
+        // blocks (~100s) and a 6-Leg 60s Plan spans far more than that.
+        const won = new Map<number, boolean>();
         const now = Math.floor(Date.now() / 1000);
         const out: LegView[] = [];
         for (let i = 0; i < n; i++) {
@@ -87,11 +126,27 @@ export default function Page() {
           };
           const anchor = planStartRef.current ?? now;
           const start = anchor + i * venue.intervalSec;
+          // Resolve the outcome for a settled Leg, once, from the payout vector.
+          if (l.state === 2 && !won.has(i) && l.marketId !== `0x${"0".repeat(64)}`) {
+            try {
+              const rec = await pub.readContract({ address: ADDR.module as Address, abi: moduleAbi, functionName: "markets", args: [l.marketId] }) as readonly unknown[];
+              const market = rec[8] as Address;
+              const nums = await pub.readContract({ address: market, abi: marketAbi, functionName: "payoutNumerators" }) as readonly bigint[];
+              const mine = l.direction === 0 ? 0 : 1;
+              won.set(i, (nums?.[mine] ?? 0n) > 0n);
+            } catch { /* leave unknown; renders as settled-neutral */ }
+          }
+          const w = won.get(i);
           out.push({
             index: i,
             direction: l.direction === 0 ? "UP" : "DOWN",
-            state: l.state === 0 ? "pending" : l.state === 1 ? "open" : l.state === 3 ? "skipped" : "won",
+            state:
+              l.state === 0 ? "pending"
+              : l.state === 1 ? "open"
+              : l.state === 3 ? "skipped"
+              : w === true ? "won" : w === false ? "lost" : "open",
             stake: l.stake, start, end: start + venue.intervalSec,
+            paid: w === true ? l.filled : w === false ? 0n : undefined,
             entryPrice: l.entryPrice ? l.entryPrice / 1e6 : undefined,
           });
         }
@@ -144,6 +199,7 @@ export default function Page() {
       const id = Number(await pub.readContract({ address: PLAN_BOOK, abi: planBookAbi, functionName: "planCount" })) - 1;
       planStartRef.current = built.market.tradingStart;
       setPlanId(id);
+      save({ planId: id, planStart: built.market.tradingStart, drawn, venueKey, legCount, total: String(total) });
       await refreshAccount();
     } catch (e) { setErr((e as Error).message.split("\n").slice(0, 3).join("\n")); } finally { setBusy(null); }
   };
@@ -155,6 +211,7 @@ export default function Page() {
       const h = await local.send({ to: PLAN_BOOK, value: 0n,
         data: encodeFunctionData({ abi: planBookAbi, functionName: "cancelPlan", args: [BigInt(planId)] }) });
       await pub.waitForTransactionReceipt({ hash: h });
+      clearSaved(); setPlanId(null); setTx(null);
       await refreshAccount();
     } catch (e) { setErr((e as Error).message.split("\n")[0]); } finally { setBusy(null); }
   };
@@ -219,7 +276,9 @@ export default function Page() {
                         <td className={l.direction === "UP" ? "up" : "down"}>{l.direction === "UP" ? "▲ UP" : "▼ DOWN"}</td>
                         <td className="dim">{(l.weight * 100).toFixed(1)}%</td>
                         <td>{fmtUsdc(l.stake, 3)}</td>
-                        <td className="dim">{live ? live.state : "—"}</td>
+                        <td className={live?.state === "won" ? "up" : live?.state === "lost" ? "down" : "dim"}>
+                          {live ? (live.state === "won" && live.paid ? `won +${fmtUsdc(live.paid, 3)}` : live.state) : "—"}
+                        </td>
                       </tr>
                     );
                   })}
@@ -242,6 +301,9 @@ export default function Page() {
                   {busy ?? "Authorise — one signature"}
                 </button>
                 <button className="danger ghost" onClick={cancel} disabled={planId === null || !!busy}>Cancel Plan</button>
+                {planId !== null && (
+                  <button className="ghost" onClick={() => { clearSaved(); setPlanId(null); setTx(null); setDrawn([]); drawnRef.current = []; legsRef.current = []; setLegs([]); setPreview(null); }} disabled={!!busy}>New</button>
+                )}
               </div>
               {tx && <div className="ok" style={{ marginTop: 8 }}>
                 Committed in one transaction · <a href={`${EXPLORER}/tx/${tx}`} target="_blank" rel="noreferrer" style={{ color: "#22c55e" }}>{tx.slice(0, 12)}…</a>

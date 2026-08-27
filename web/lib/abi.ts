@@ -59,3 +59,24 @@ export const SKIP_REASON = [
   "MarketNotTrading", "WindowTooShort", "NoLiquidity", "StakeTooSmall", "DryRun",
   "OrderRejected", "PredecessorUnresolved", "NothingPending", "UnknownSchedule",
 ] as const;
+
+/** Just enough of the module + market to decide whether a Leg won. */
+export const moduleAbi = [
+  { name: "markets", type: "function", stateMutability: "view",
+    inputs: [{ name: "marketId", type: "bytes32" }],
+    outputs: [
+      { name: "oracleQuestionId", type: "uint256" }, { name: "outcomeSlotCount", type: "uint8" },
+      { name: "voidPolicy", type: "uint8" }, { name: "collateral", type: "address" },
+      { name: "originOperatorId", type: "uint32" }, { name: "originVenueId", type: "bytes32" },
+      { name: "oracleAdapter", type: "address" }, { name: "creator", type: "address" },
+      { name: "market", type: "address" }, { name: "pool", type: "address" },
+      { name: "yesId", type: "uint256" }, { name: "noId", type: "uint256" },
+      { name: "tradingStart", type: "uint64" }, { name: "expiry", type: "uint64" }] },
+] as const;
+
+export const marketAbi = [
+  { name: "isResolved", type: "function", stateMutability: "view", inputs: [], outputs: [{ type: "bool" }] },
+  { name: "isVoided", type: "function", stateMutability: "view", inputs: [], outputs: [{ type: "bool" }] },
+  // Settlement v3 stores a payout VECTOR, not a winner. The winning index is its argmax.
+  { name: "payoutNumerators", type: "function", stateMutability: "view", inputs: [], outputs: [{ type: "uint256[]" }] },
+] as const;
