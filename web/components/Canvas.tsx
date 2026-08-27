@@ -5,12 +5,15 @@ import { renderPrice } from "../lib/render/price";
 import { renderCurve, type DrawnPoint } from "../lib/render/curve";
 import { renderLegs } from "../lib/render/legs";
 import { renderCursor, type CursorState } from "../lib/render/cursor";
+import { renderFlashes, type Flash } from "../lib/render/flash";
 import { AXIS_H, AXIS_W, type Dims, type LegView, type PricePoint } from "../lib/render/types";
 
 interface Props {
   priceRef: React.RefObject<PricePoint[]>;
   legsRef: React.RefObject<LegView[]>;
   drawnRef: React.RefObject<DrawnPoint[]>;
+  /** Payouts landing. Drawn last so the amount floats over everything. */
+  flashRef: React.RefObject<Flash[]>;
   horizonSec: number;
   drawingEnabled: boolean;
   onStrokeEnd: (pts: DrawnPoint[]) => void;
@@ -22,7 +25,7 @@ interface Props {
  * A streaming price feed in React state re-renders the tree on every tick and the
  * frame budget is gone. Nothing here reads component state inside the loop.
  */
-export function Canvas({ priceRef, legsRef, drawnRef, horizonSec, drawingEnabled, onStrokeEnd }: Props) {
+export function Canvas({ priceRef, legsRef, drawnRef, flashRef, horizonSec, drawingEnabled, onStrokeEnd }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const dimsRef = useRef<Dims>({ w: 900, h: 420, dpr: 1 });
@@ -65,12 +68,13 @@ export function Canvas({ priceRef, legsRef, drawnRef, horizonSec, drawingEnabled
         renderPrice(ctx, d, vp, priceRef.current ?? []);
         renderCurve(ctx, vp, drawnRef.current ?? [], drawingRef.current);
         renderCursor(ctx, vp, cursorRef.current);
+        renderFlashes(ctx, vp, legsRef.current ?? [], flashRef.current ?? []); // on top
       }
       rafRef.current = requestAnimationFrame(tick);
     };
     rafRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [priceRef, legsRef, drawnRef, horizonSec]);
+  }, [priceRef, legsRef, drawnRef, flashRef, horizonSec]);
 
   const local = (e: React.PointerEvent) => {
     const r = canvasRef.current!.getBoundingClientRect();
