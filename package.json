@@ -1,0 +1,8 @@
+{
+  "name": "kurvv",
+  "private": true,
+  "scripts": {
+    "test": "./scripts/check-isolation.sh && node --test --experimental-strip-types web/test/*.test.ts",
+    "check:isolation": "./scripts/check-isolation.sh"
+  }
+}
