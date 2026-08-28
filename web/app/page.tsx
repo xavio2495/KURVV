@@ -9,7 +9,7 @@ import { buildCommit, rollPriceSeries, PLAN_BOOK } from "../lib/commit";
 import { VENUES, ADDR, EXPLORER, type Venue } from "../lib/venues";
 import { erc20Abi, planBookAbi, moduleAbi, marketAbi } from "../lib/abi";
 import { pub, fmtUsdc, fmtStt } from "../lib/chain";
-import { createLocalAdapter } from "../lib/wallet/local";
+import { useDemoAdapter } from "../lib/wallet/demo";
 import { useFires } from "../lib/useFires";
 import { useWindowClock } from "../lib/useWindowClock";
 import type { LegView, PricePoint } from "../lib/render/types";
@@ -30,7 +30,8 @@ const load = (): Saved | null => { try { return JSON.parse(localStorage.getItem(
 const clearSaved = () => { try { localStorage.removeItem(SAVE_KEY); } catch {} };
 
 export default function Page() {
-  const local = useMemo(() => createLocalAdapter(), []);
+  // The demo wallet signs SERVER-SIDE; the browser never holds a key.
+  const local = useDemoAdapter();
   const [venueKey, setVenueKey] = useState<Venue["key"]>("fast");
   const venue = VENUES[venueKey];
   const [legCount, setLegCount] = useState(6);
