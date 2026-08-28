@@ -32,7 +32,9 @@ export const VENUES = {
     venueId: "0x679795a0195a1b76cdebb7c51d74e058aee92919b8c3389af86ef24535e8a28c",
     marketCreator: "0x94d963b6670ab96e78c8d0c46ca35d196d606efe" as Address,
     rollTopic: "0x2f81a5d8c4d5d43e0ba57b7ee38e6a5ac6799dd18f58f377d1fc8359d6a27eee" as `0x${string}`,
-    series: { BTC900: 1, ETH900: 2, BTC3600: 3, ETH3600: 5 },
+    // Verified against seriesById() on chain: 1/2 = BTC/ETH 900s, 3/4 = BTC/ETH 3600s,
+    // 5/6 = BTC/ETH 14400s, 7/8 = BTC/ETH 86400s.
+    series: { BTC900: 1, ETH900: 2, BTC3600: 3, ETH3600: 4, BTC14400: 5, ETH14400: 6 },
     openDelay: 45,
     minHeadroom: 120,
   },
