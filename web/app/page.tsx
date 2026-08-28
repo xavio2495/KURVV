@@ -66,6 +66,7 @@ export default function Page() {
    * already reached the wallet, not a projection.
    */
   const onSettled = useCallback((legIndex: number, paidToOwner: bigint) => {
+    console.log("[kurvv] flash", legIndex, paidToOwner.toString());
     flashRef.current = [...pruneFlashes(flashRef.current), { legIndex, amount: paidToOwner, at: Date.now() }];
   }, []);
 
