@@ -1,10 +1,10 @@
 {
   "name": "kurvv-contracts",
   "private": true,
-  
   "scripts": {
     "build": "hardhat compile",
-    "deploy": "hardhat run scripts/deploy.ts --network shannon"
+    "deploy": "hardhat run scripts/deploy.ts --network shannon",
+    "test": "hardhat test"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-viem": "^2.0.6",

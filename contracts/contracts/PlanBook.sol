@@ -282,7 +282,7 @@ contract PlanBook is SomniaEventHandler {
             origin: address(0),
             emitter: p.marketCreator
         });
-        uint256 id = SomniaExtensions.subscribe(address(this), filter, _opts(gasLimit));
+        uint256 id = _doSubscribe(filter, _opts(gasLimit));
         seriesSubscription[key] = id;
         seriesGasLimit[key] = gasLimit;
         emit SubscriptionOpened(id, p.marketCreator, p.seriesId);
@@ -290,6 +290,34 @@ contract PlanBook is SomniaEventHandler {
 
     function _opts(uint64 gasLimit) private pure returns (SomniaExtensions.SubscriptionOptions memory) {
         return SomniaExtensions.SubscriptionOptions({priorityFeePerGas: 0, maxFeePerGas: 20 gwei, gasLimit: gasLimit});
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Precompile seam
+    //
+    // These two wrappers exist ONLY so the lifecycle can be unit-tested. The Somnia
+    // reactivity precompile lives at the fixed address 0x0100, which a local EVM
+    // reserves: `hardhat_setCode` there is silently ignored, the call returns empty,
+    // and decoding that empty return reverts. So a local test can never reach
+    // `commitPlan` unless subscription creation is overridable.
+    //
+    // Production behaviour is unchanged — both simply forward to SomniaExtensions.
+    // Nothing overrides them outside `contracts/test`.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    function _doSubscribe(
+        SomniaExtensions.SubscriptionFilter memory filter,
+        SomniaExtensions.SubscriptionOptions memory options
+    ) internal virtual returns (uint256) {
+        return SomniaExtensions.subscribe(address(this), filter, options);
+    }
+
+    function _doSchedule(uint256 firesAtMillis, SomniaExtensions.SubscriptionOptions memory options)
+        internal
+        virtual
+        returns (uint256)
+    {
+        return SomniaExtensions.scheduleSubscriptionAtTimestamp(address(this), firesAtMillis, options);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -327,7 +355,7 @@ contract PlanBook is SomniaEventHandler {
 
         if (_pendingOpens.length > 0) {
             uint256 firesAt = (block.timestamp + schedules[_pendingOpens[0]].openDelay) * 1000 + 1;
-            SomniaExtensions.scheduleSubscriptionAtTimestamp(address(this), firesAt, _opts(gasLimit));
+            _doSchedule(firesAt, _opts(gasLimit));
             emit OpenScheduled(_pendingOpens.length, seriesId, eventTopics[2], firesAt);
         }
     }
@@ -598,7 +626,7 @@ contract PlanBook is SomniaEventHandler {
             origin: address(0),
             emitter: marketCreator
         });
-        uint256 id = SomniaExtensions.subscribe(address(this), filter, _opts(gasLimit));
+        uint256 id = _doSubscribe(filter, _opts(gasLimit));
         seriesSubscription[key] = id;
         seriesGasLimit[key] = gasLimit;
         emit SubscriptionOpened(id, marketCreator, seriesId);
