@@ -2,7 +2,8 @@
   "name": "kurvv",
   "private": true,
   "scripts": {
-    "test": "./scripts/check-isolation.sh && node --test --experimental-strip-types web/test/*.test.ts",
-    "check:isolation": "./scripts/check-isolation.sh"
+    "test": "./scripts/check-isolation.sh && node --test --experimental-strip-types web/test/*.test.ts && npm --prefix contracts test",
+    "check:isolation": "./scripts/check-isolation.sh",
+    "test:contracts": "npm --prefix contracts test"
   }
 }
