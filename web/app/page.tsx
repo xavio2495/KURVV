@@ -6,6 +6,7 @@ import { AutonomyPanel } from "../components/AutonomyPanel";
 import { WindowClock } from "../components/WindowClock";
 import { curveToPlan, type CurvePoint, type Leg } from "../lib/curve";
 import { buildCommit, rollPriceSeries, PLAN_BOOK } from "../lib/commit";
+import { densePriceSeries } from "../lib/priceSeries";
 import { VENUES, ADDR, EXPLORER, type Venue } from "../lib/venues";
 import { erc20Abi, planBookAbi, moduleAbi, marketAbi } from "../lib/abi";
 import { pub, fmtUsdc, fmtStt } from "../lib/chain";
@@ -66,7 +67,6 @@ export default function Page() {
    * already reached the wallet, not a projection.
    */
   const onSettled = useCallback((legIndex: number, paidToOwner: bigint) => {
-    console.log("[kurvv] flash", legIndex, paidToOwner.toString());
     flashRef.current = [...pruneFlashes(flashRef.current), { legIndex, amount: paidToOwner, at: Date.now() }];
   }, []);
 
@@ -121,7 +121,12 @@ export default function Page() {
     const load = async () => {
       try {
         const since = Math.floor(Date.now() / 1000) - horizon * 5;
-        const s = await rollPriceSeries(venue, since);
+        // Real spot fills, ~5.3/min, versus one point per Window from the roll
+        // references. On the 15m venue this is not an upgrade — it is the ONLY
+        // source, because those markets carry strike 0 and a question with no
+        // number in it, so rollPriceSeries returns nothing there.
+        let s = await densePriceSeries(venue.key, since);
+        if (!s.length) s = await rollPriceSeries(venue, since);
         if (!stop && s.length) priceRef.current = s.map((p) => ({ t: p.t, price: p.price }));
       } catch { /* leave the last good series on screen */ }
     };
