@@ -34,6 +34,3 @@ export interface LegView {
   paid?: bigint;
   entryPrice?: number;
 }
-
-export const AXIS_W = 62;
-export const AXIS_H = 22;
