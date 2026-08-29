@@ -5,6 +5,8 @@ import { pub } from "./chain";
 import { planBookAbi } from "./abi";
 import { PLAN_BOOK } from "./commit";
 import { handleFor } from "./handle";
+import { gradeVector } from "./outcome";
+import { payoutCache } from "./payout";
 
 /**
  * The standings, read from the PlanBook itself.
@@ -17,6 +19,11 @@ import { handleFor } from "./handle";
  * span, and a day of history is thousands of pages. Reading indexed state directly
  * is one cheap `eth_call` per Plan and per Leg instead, which is why the board walks
  * `planCount()` backwards rather than replaying `PlanCommitted`.
+ *
+ * The sweep runs in three phases — owners, then Legs, then outcomes — because each
+ * needs the previous one complete. Tallying happens after all of it, synchronously:
+ * a read-modify-write on a shared Map across an `await` loses every Plan but the
+ * last, and one wallet owning several Plans is the NORMAL case here, not a race.
  */
 
 export interface BoardRow {
@@ -33,7 +40,30 @@ export interface BoardRow {
 const WINDOW = 40;
 /** Legs read per Plan. The device never commits more than eight. */
 const MAX_LEGS = 8;
+/**
+ * Requests in flight at once.
+ *
+ * Unbounded `Promise.all` over the window fires ~400 calls at a public endpoint every
+ * 25s. Rate-limited failures are silently dropped per item, so the board would
+ * publish whatever subset survived as though it were the whole truth.
+ */
+const LANES = 8;
+/** Above this share of failed Plan reads the sweep is not a picture of anything. */
+const MAX_LOSS = 0.25;
 
+const ZERO_ID = `0x${"0".repeat(64)}`;
+
+/** Run `fn` over `items` a few at a time, preserving order. */
+async function inLanes<T, R>(items: T[], fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(LANES, items.length) }, async () => {
+    for (let i = next++; i < items.length; i = next++) out[i] = await fn(items[i]);
+  }));
+  return out;
+}
+
+interface RawLeg { direction: number; state: number; stake: bigint; filled: bigint; marketId: `0x${string}` }
 interface Tally { plans: number; settled: number; won: number; staked: bigint; paid: bigint }
 
 async function readBoard(book: Address, me?: string): Promise<BoardRow[]> {
@@ -45,43 +75,62 @@ async function readBoard(book: Address, me?: string): Promise<BoardRow[]> {
   const first = Math.max(0, count - WINDOW);
   const ids = Array.from({ length: count - first }, (_, i) => first + i);
 
-  const tally = new Map<string, Tally>();
-
-  await Promise.all(ids.map(async (id) => {
-    let owner: string;
+  // ── phase 1: who owns each Plan, and how long is it ──────────────────────
+  const heads = await inLanes(ids, async (id) => {
     try {
-      const s = await pub.readContract({
-        address: book, abi: planBookAbi, functionName: "schedules", args: [BigInt(id)],
-      }) as readonly unknown[];
-      owner = String(s[0]);
-    } catch { return; }
-    if (!owner || /^0x0+$/.test(owner)) return;
+      const [s, n] = await Promise.all([
+        pub.readContract({ address: book, abi: planBookAbi, functionName: "schedules", args: [BigInt(id)] }) as Promise<readonly unknown[]>,
+        pub.readContract({ address: book, abi: planBookAbi, functionName: "legCount", args: [BigInt(id)] }) as Promise<bigint>,
+      ]);
+      const owner = String(s[0]);
+      if (!owner || /^0x0+$/.test(owner)) return null;
+      return { id, owner: owner.toLowerCase(), n: Math.min(Number(n), MAX_LEGS) };
+    } catch { return undefined; }
+  });
 
-    const n = Number(await pub.readContract({
-      address: book, abi: planBookAbi, functionName: "legCount", args: [BigInt(id)],
-    }).catch(() => 0n) as bigint);
+  // `undefined` is a failed read; `null` is a Plan that genuinely is not there.
+  if (heads.filter((h) => h === undefined).length > ids.length * MAX_LOSS) return [];
+  const plans = heads.filter((h): h is { id: number; owner: string; n: number } => !!h);
+  if (!plans.length) return [];
 
-    const t = tally.get(owner.toLowerCase()) ?? { plans: 0, settled: 0, won: 0, staked: 0n, paid: 0n };
-    t.plans++;
+  // ── phase 2: the Legs ────────────────────────────────────────────────────
+  const legsByPlan = await inLanes(plans, (p) => Promise.all(
+    Array.from({ length: p.n }, (_, i) =>
+      pub.readContract({ address: book, abi: planBookAbi, functionName: "getLeg", args: [BigInt(p.id), i] })
+        .then((l) => l as RawLeg)
+        .catch(() => null)),
+  ));
 
-    const legs = await Promise.all(
-      Array.from({ length: Math.min(n, MAX_LEGS) }, (_, i) =>
-        pub.readContract({ address: book, abi: planBookAbi, functionName: "getLeg", args: [BigInt(id), i] })
-          .catch(() => null)),
-    );
-    for (const l of legs) {
-      if (!l) continue;
-      const leg = l as { state: number; stake: bigint; filled: bigint };
-      t.staked += leg.stake;
-      // State 2 is Settled. `filled` is the winning collateral that came back; a
-      // losing Leg redeems successfully and pays nothing, so >0 IS the win test.
-      if (leg.state === 2) {
-        t.settled++;
-        if (leg.filled > 0n) { t.won++; t.paid += leg.filled; }
-      }
-    }
-    tally.set(owner.toLowerCase(), t);
+  // ── phase 3: what the settled ones were worth ────────────────────────────
+  // A settled Leg's result is NOT in the struct. Every Plan on this series shares one
+  // market per Window, so memoising by marketId collapses the whole board to a few.
+  const payoutOf = payoutCache();
+  const settled = legsByPlan.flat().filter((l): l is RawLeg => !!l && l.state === 2 && l.marketId !== ZERO_ID);
+  const resolved = new Map<string, readonly bigint[] | null>();
+  await Promise.all([...new Set(settled.map((l) => l.marketId))].map(async (m) => {
+    resolved.set(m.toLowerCase(), await payoutOf(m));
   }));
+
+  // ── phase 4: tally, with no await in sight ───────────────────────────────
+  const tally = new Map<string, Tally>();
+  for (let i = 0; i < plans.length; i++) {
+    let t = tally.get(plans[i].owner);
+    if (!t) { t = { plans: 0, settled: 0, won: 0, staked: 0n, paid: 0n }; tally.set(plans[i].owner, t); }
+    t.plans++;
+    for (const l of legsByPlan[i]) {
+      if (!l) continue;
+      t.staked += l.stake;
+      if (l.state !== 2 || l.marketId === ZERO_ID) continue;
+      const nums = resolved.get(l.marketId.toLowerCase());
+      if (!nums) continue;
+      const o = gradeVector(nums, l.direction, l.filled);
+      t.paid += o.paid;
+      // A void is not a result: it counts neither for the hit rate nor against it.
+      if (o.voided) continue;
+      t.settled++;
+      if (o.won) t.won++;
+    }
+  }
 
   const rows = [...tally.entries()]
     .map(([addr, t]) => {

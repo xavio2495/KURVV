@@ -348,7 +348,7 @@ export function createChart(): Chart {
           leg.state === "won" ? STATE.won
           : leg.state === "lost" ? STATE.lost
           : leg.state === "open" ? STATE.gold
-          : leg.state === "skipped" ? STATE.skipped
+          : leg.state === "skipped" || leg.state === "void" ? STATE.skipped
           : leg.direction === "UP" ? STATE.up : STATE.down;
         col.setHex(base);
         // An open Leg breathes, so "the chain is working" is visible without text.

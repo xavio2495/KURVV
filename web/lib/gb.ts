@@ -293,7 +293,7 @@ export function drawGb(g: CanvasRenderingContext2D, s: GbState) {
       text(g, line1, 4 * U, stripY + 3 * U, GB.lightest);
       text(g, line2, 4 * U, stripY + 12 * U, GB.light);
     } else {
-      const done = s.legs.filter((l) => l.state === "won" || l.state === "lost").length;
+      const done = s.legs.filter((l) => l.state === "won" || l.state === "lost" || l.state === "void").length;
       text(g, `plan #${s.planId}`, 4 * U, stripY + 3 * U, GB.lightest);
       text(g, `${done}/${s.legs.length} settled`, 4 * U, stripY + 12 * U, GB.light);
       legPips(g, s.legs, GB_W - 4 * U - s.legs.length * 7 * U, stripY + 12 * U);
@@ -327,14 +327,14 @@ export function drawGb(g: CanvasRenderingContext2D, s: GbState) {
     text(g, dead ? "no market open" : "no plan \u00b7 press draw", 4 * U, stripY + 3 * U, GB.lightest);
     text(g, dead ? `${s.asset ?? ""} window closed` : `legs ${s.legCount}`, 4 * U, stripY + 13 * U, GB.light);
   } else {
-    const done = s.legs.filter((l) => l.state === "won" || l.state === "lost").length;
+    const done = s.legs.filter((l) => l.state === "won" || l.state === "lost" || l.state === "void").length;
     const open = s.legs.filter((l) => l.state === "open").length;
     text(g, `plan #${s.planId}`, 4 * U, stripY + 3 * U, GB.lightest);
     text(g, `${done}/${s.legs.length} settled`, 4 * U, stripY + 13 * U, GB.light);
     // One pip per Leg — an unattended chain advancing is visible at a glance.
     s.legs.slice(0, 8).forEach((l, i) => {
       const x = GB_W - 6 * U - (8 - i) * 7 * U;
-      const lit = l.state === "won" || l.state === "lost";
+      const lit = l.state === "won" || l.state === "lost" || l.state === "void";
       const blink = l.state === "open" && s.frameNo % 44 < 22;
       fill(g, x, stripY + 8 * U, 5 * U, 7 * U, lit || blink ? GB.lightest : GB.light);
     });

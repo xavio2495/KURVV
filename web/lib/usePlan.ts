@@ -1,10 +1,12 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { encodeFunctionData, type Address, type Hex } from "viem";
+import { decodeEventLog, encodeFunctionData, type Address, type Hex } from "viem";
 import { pub } from "./chain";
-import { erc20Abi, marketAbi, moduleAbi, planBookAbi } from "./abi";
+import { erc20Abi, planBookAbi } from "./abi";
 import { buildCommit, buildCommitFromLegs, PLAN_BOOK } from "./commit";
 import { ADDR, EXPLORER, type Venue } from "./venues";
+import { gradeVector } from "./outcome";
+import { payoutCache } from "./payout";
 import { useDemoAdapter } from "./wallet/demo";
 import type { CurvePoint, Leg } from "./curve";
 import type { BatchCall } from "./wallet/types";
@@ -113,9 +115,21 @@ export function usePlan(venue: Venue): PlanState {
     const rc = await pub.waitForTransactionReceipt({ hash });
     if (rc.status !== "success") throw new Error(`reverted — ${EXPLORER}/tx/${hash}`);
     setTx(hash);
-    const id = Number(await pub.readContract({
-      address: PLAN_BOOK, abi: planBookAbi, functionName: "planCount",
-    })) - 1;
+    // The planId comes from OUR receipt, never from `planCount() - 1`: any other
+    // commit landing in between would hand us someone else's Plan, which then gets
+    // saved, polled, restored and passed to `cancelPlan`.
+    let id: number | null = null;
+    for (const lg of rc.logs) {
+      if (lg.address.toLowerCase() !== PLAN_BOOK.toLowerCase()) continue;
+      try {
+        const ev = decodeEventLog({ abi: planBookAbi, data: lg.data, topics: lg.topics });
+        if (ev.eventName === "PlanCommitted") {
+          id = Number((ev.args as unknown as { planId: bigint }).planId);
+          break;
+        }
+      } catch { /* some other event from the book */ }
+    }
+    if (id === null) throw new Error("commit landed but emitted no PlanCommitted");
     planStartRef.current = built.market.tradingStart;
     setPlanId(id);
     save({
@@ -155,48 +169,50 @@ export function usePlan(venue: Venue): PlanState {
   useEffect(() => {
     if (planId === null || !PLAN_BOOK) return;
     let stop = false;
+    // A tick that outlives its 4s interval must not overlap the next one: two polls
+    // in flight can finish out of order and write a STALE `legsRef` over a fresh one.
+    let inFlight = false;
     const poll = async () => {
+      if (inFlight) return;
+      inFlight = true;
       try {
         const n = Number(await pub.readContract({
           address: PLAN_BOOK, abi: planBookAbi, functionName: "legCount", args: [BigInt(planId)],
         }));
         const now = Math.floor(Date.now() / 1000);
-        const out: LegView[] = [];
-        for (let i = 0; i < n; i++) {
-          const l = await pub.readContract({
+        const raw = await Promise.all(Array.from({ length: n }, (_, i) =>
+          pub.readContract({
             address: PLAN_BOOK, abi: planBookAbi, functionName: "getLeg", args: [BigInt(planId), i],
-          }) as { direction: number; state: number; entryPrice: number; stake: bigint; filled: bigint; marketId: `0x${string}` };
+          }) as Promise<{ direction: number; state: number; entryPrice: number; stake: bigint; filled: bigint; marketId: `0x${string}` }>));
+
+        // A settled Leg is `Settled` whether it won, lost or voided — the struct does
+        // not record the outcome, and `filled` is the quantity bought at OPEN, not
+        // the collateral that came back. Derive it from the market's payout VECTOR.
+        const payoutOf = payoutCache();
+        const vectors = await Promise.all(raw.map((l) =>
+          l.state === 2 && l.marketId !== ZERO ? payoutOf(l.marketId) : Promise.resolve(null)));
+
+        const out: LegView[] = raw.map((l, i) => {
           const anchor = planStartRef.current ?? now;
           const start = anchor + i * venue.intervalSec;
-          // A settled Leg is `Settled` whether it won or lost — the struct does not
-          // record the outcome. Derive it from the market's payout VECTOR.
-          let won: boolean | undefined;
-          if (l.state === 2 && l.marketId !== ZERO) {
-            try {
-              const rec = await pub.readContract({
-                address: ADDR.module as Address, abi: moduleAbi, functionName: "markets", args: [l.marketId],
-              }) as readonly unknown[];
-              const nums = await pub.readContract({
-                address: rec[8] as Address, abi: marketAbi, functionName: "payoutNumerators",
-              }) as readonly bigint[];
-              won = (nums?.[l.direction === 0 ? 0 : 1] ?? 0n) > 0n;
-            } catch { /* leave unknown; renders as open */ }
-          }
-          out.push({
+          const nums = vectors[i];
+          const o = nums ? gradeVector(nums, l.direction, l.filled) : null;
+          return {
             index: i,
             direction: l.direction === 0 ? "UP" : "DOWN",
             state:
               l.state === 0 ? "pending"
               : l.state === 1 ? "open"
               : l.state === 3 ? "skipped"
-              : won === true ? "won" : won === false ? "lost" : "open",
+              : !o ? "open"
+              : o.voided ? "void" : o.won ? "won" : "lost",
             stake: l.stake, start, end: start + venue.intervalSec,
-            paid: won === true ? l.filled : won === false ? 0n : undefined,
+            paid: o ? o.paid : undefined,
             entryPrice: l.entryPrice ? l.entryPrice / 1e6 : undefined,
-          });
-        }
+          };
+        });
         if (!stop) { legsRef.current = out; setLegs(out); }
-      } catch { /* transient */ }
+      } catch { /* transient */ } finally { inFlight = false; }
     };
     void poll();
     const t = setInterval(poll, 4000);
