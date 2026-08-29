@@ -20,7 +20,7 @@ import { shade, type Skin } from "../skins";
  */
 
 export type DeviceId =
-  | "authorise" | "draw" | "board" | "cancel" | "new" | "swap" | "mode";
+  | "authorise" | "draw" | "asset" | "cancel" | "profile" | "swap" | "mode";
 
 const BODY = { w: 14.4, h: 8.4, corner: 0.6, depth: 0.62, bevel: 0.08 };
 const BACK = { depth: 1.0 };
@@ -64,16 +64,18 @@ const BET = {
 };
 /** The two quick actions, STACKED under the scroll on the same centre line. */
 const QUICK: { id: DeviceId; y: number; icon: IconName }[] = [
-  { id: "swap", y: BET.y - BET.radius - 0.62, icon: "swap" },
-  { id: "mode", y: BET.y - BET.radius - 1.62, icon: "mode" },
+  { id: "swap", y: BET.y - BET.radius - 0.62, icon: "gear" },
+  { id: "mode", y: BET.y - BET.radius - 1.62, icon: "play" },
 ];
 const QUICK_X = BET.x;
 const QUICK_R = 0.38;
 
 /** Which action sits where on the wheel. */
 const QUADRANTS: { id: DeviceId; icon: IconName; ax: number; ay: number }[] = [
-  { id: "new", icon: "plan", ax: 0, ay: 1 },
-  { id: "board", icon: "trophy", ax: 1, ay: 0 },
+  // Each key names the one thing it does. The pencil is shared by both gestures —
+  // draw and grid are the same act of committing a shape, so they share a control.
+  { id: "profile", icon: "person", ax: 0, ay: 1 },
+  { id: "asset", icon: "token", ax: 1, ay: 0 },
   { id: "draw", icon: "curve", ax: 0, ay: -1 },
   { id: "cancel", icon: "back", ax: -1, ay: 0 },
 ];
@@ -356,7 +358,12 @@ export function createDevice(initialSkin: Skin, mainTexture: THREE.Texture, gbCa
     const holder = new THREE.Group();
     holder.add(g);
     holder.rotation.y = Math.PI;
-    holder.position.set(0, 0, -BODY.depth - BACK.depth + 0.02);
+    // Derive the rear face rather than guessing it: extrudeFront leaves the geometry
+    // spanning -(depth + 2*bevel)..0, so the back shell's outer face is its bounding
+    // min plus its own offset. Placing by hand buried the mark inside the shell.
+    backGeo.computeBoundingBox();
+    const rear = back.position.z + backGeo.boundingBox!.min.z;
+    holder.position.set(0, 0, rear - 0.005);
     root.add(holder);
     backMark = markMat;
   });

@@ -8,7 +8,9 @@ import * as THREE from "three";
  * control. That is what lets the backlight carry the enabled/disabled state instead
  * of a second set of assets.
  */
-export type IconName = "plan" | "coins" | "curve" | "back" | "bolt" | "grid" | "swap" | "mode" | "trophy";
+export type IconName =
+  | "plan" | "coins" | "curve" | "back" | "bolt" | "grid" | "swap" | "mode" | "trophy"
+  | "person" | "token" | "gear" | "play";
 
 const S = 128;
 
@@ -142,6 +144,60 @@ const DRAW: Record<IconName, (g: CanvasRenderingContext2D) => void> = {
     g.beginPath();
     g.moveTo(42, 104); g.lineTo(86, 104);
     g.stroke();
+  },
+  // The trader: their name, their standings, their record.
+  person: (g) => {
+    g.lineWidth = 8;
+    g.beginPath();
+    g.arc(64, 44, 20, 0, Math.PI * 2);
+    g.stroke();
+    g.beginPath();
+    g.arc(64, 118, 38, Math.PI * 1.16, Math.PI * 1.84);
+    g.stroke();
+  },
+  // Which asset the chart is following.
+  token: (g) => {
+    g.lineWidth = 8;
+    g.beginPath();
+    g.ellipse(64, 40, 34, 14, 0, 0, Math.PI * 2);
+    g.stroke();
+    g.beginPath();
+    g.moveTo(30, 40); g.lineTo(30, 88);
+    g.bezierCurveTo(30, 100, 98, 100, 98, 88);
+    g.lineTo(98, 40);
+    g.stroke();
+    g.beginPath();
+    g.moveTo(30, 64); g.bezierCurveTo(30, 76, 98, 76, 98, 64);
+    g.stroke();
+  },
+  // Settings.
+  gear: (g) => {
+    g.lineWidth = 8;
+    const R = 30;
+    const r = 13;
+    g.beginPath();
+    g.arc(64, 64, r, 0, Math.PI * 2);
+    g.stroke();
+    g.beginPath();
+    g.arc(64, 64, R, 0, Math.PI * 2);
+    g.stroke();
+    g.lineWidth = 12;
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      g.beginPath();
+      g.moveTo(64 + Math.cos(a) * (R - 2), 64 + Math.sin(a) * (R - 2));
+      g.lineTo(64 + Math.cos(a) * (R + 14), 64 + Math.sin(a) * (R + 14));
+      g.stroke();
+    }
+  },
+  // The game mode selector.
+  play: (g) => {
+    g.beginPath();
+    g.moveTo(46, 30);
+    g.lineTo(102, 64);
+    g.lineTo(46, 98);
+    g.closePath();
+    g.fill();
   },
   // Commit: the transaction going out.
   bolt: (g) => {
