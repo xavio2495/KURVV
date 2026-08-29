@@ -2,12 +2,21 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { DeviceStage } from "../../components/DeviceStage";
+import type { Mode } from "../../components/Device3D";
+import { InstallApp } from "../../components/InstallApp";
 import { curveToPlan, type CurvePoint, type Leg } from "../../lib/curve";
+import { cellsToPlan, emptyCells, hasPositions, type PixelCells } from "../../lib/pixel";
 import { densePriceSeries } from "../../lib/priceSeries";
-import { rollPriceSeries } from "../../lib/commit";
-import { VENUES } from "../../lib/venues";
+import { rollPriceSeries, venueIsLive } from "../../lib/commit";
+import { usePlan } from "../../lib/usePlan";
+import { useFires } from "../../lib/useFires";
+import { useWindowClock } from "../../lib/useWindowClock";
+import { PLAN_BOOK } from "../../lib/commit";
+import { VENUES, venueOf, EXPLORER, type Venue } from "../../lib/venues";
+import { fmtUsdc } from "../../lib/chain";
+import { sfx } from "../../lib/sfx";
 import type { DrawPoint } from "../../lib/three/chart";
-import type { LegView, PricePoint } from "../../lib/render/types";
+import type { PricePoint } from "../../lib/render/types";
 
 /**
  * A drawn point is normalised: `u` across the future span, `v` bottom-to-top.
@@ -16,53 +25,216 @@ import type { LegView, PricePoint } from "../../lib/render/types";
  */
 const toCurvePoints = (pts: DrawPoint[]): CurvePoint[] => pts.map((p) => ({ x: p.u, y: -p.v }));
 
+const STAKES = [500_000n, 1_000_000n, 2_000_000n, 5_000_000n, 10_000_000n] as const;
+
 export default function Play() {
   const [legCount, setLegCount] = useState(6);
+  const [venueKey, setVenueKey] = useState<Venue["key"]>("fast-btc");
+  const [stakeIndex, setStakeIndex] = useState(2);
   const [preview, setPreview] = useState<Leg[] | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const [drawErr, setDrawErr] = useState<string | null>(null);
   const [shared, setShared] = useState(false);
+  const [muted, setMuted] = useState(false);
+  const [venueLive, setVenueLive] = useState<boolean | null>(null);
 
-  const priceRef = useRef<PricePoint[]>([]);
-  const legsRef = useRef<LegView[]>([]);
-  const curveRef = useRef<DrawPoint[]>([]);
-  const planStartRef = useRef<number | null>(null);
-
-  const venue = VENUES.fast;
+  const venue = venueOf(venueKey);
+  const total = STAKES[stakeIndex];
   const horizon = legCount * venue.intervalSec;
 
-  // Real on-chain observations: WBTC spot fills from the same indexer the Event
-  // Contracts settle against. Nothing is interpolated; gaps stay gaps.
+  const priceRef = useRef<PricePoint[]>([]);
+  /**
+   * Every drawn Curve, oldest first; the LAST is the one that commits.
+   *
+   * Earlier Curves stay on the chart to compare against rather than being wiped by
+   * the next stroke. They are presentation only — one Plan is committed at a time,
+   * and it is always the newest line.
+   */
+  const curveRef = useRef<DrawPoint[][]>([]);
+  const activeCurve = () => curveRef.current[curveRef.current.length - 1] ?? [];
+  const cellsRef = useRef<PixelCells>(emptyCells(8));
+  const [mode, setMode] = useState<Mode>("draw");
+
+  const plan = usePlan(venue);
+
+  /**
+   * The Reactivity fire feed — the evidence that nobody signed the Legs.
+   *
+   * `useFires` pages the PlanBook's own logs forward and marks every invocation
+   * where `from == to == the contract`, which is a shape no private key can produce.
+   * The handler also publishes the millisecond its one-shot open fires, so that is
+   * preferred over the extrapolated Window clock whenever it is still ahead of now.
+   */
+  const feed = useFires(PLAN_BOOK || undefined, plan.planId, plan.planStartRef.current, (_i, paid) => {
+    sfx.settle(paid > 0n);
+  });
+  const clock = useWindowClock(venue);
+  const scheduled = feed.scheduledOpenMs !== null && feed.scheduledOpenMs > Date.now()
+    ? (feed.scheduledOpenMs - Date.now()) / 1000
+    : null;
+
+  /**
+   * Real on-chain observations, in falling order of directness.
+   *
+   * 1. Spot fills from the same indexer the Event Contracts settle against.
+   * 2. This venue's own market references, parsed from the question text.
+   * 3. The 60-second venue's references for the same asset.
+   *
+   * Step 3 is not a nicety. The WETH spot book is effectively dead — five fills in
+   * thirty hours — so ETH would chart as an empty frame on step 1, and the hourly
+   * venue asks "closes at or above its opening price", which carries no number at
+   * all, so step 2 is empty there too. The 60s venue prints a real price for both
+   * assets every minute. The asset's price does not depend on which Window a Plan
+   * targets, so borrowing that series is exact, not an approximation.
+   *
+   * Nothing is interpolated; gaps stay gaps.
+   */
   useEffect(() => {
     let stop = false;
     const run = async () => {
       try {
-        const since = Math.floor(Date.now() / 1000) - horizon * 5;
+        const now = Math.floor(Date.now() / 1000);
+        const since = now - horizon * 5;
+        // Emptiness is the wrong test. The WETH book returns a handful of fills from
+        // eight hours ago, which is non-empty and useless: the chart draws a line
+        // that stops at the far edge of the past. A source counts only if its newest
+        // observation is recent enough to be the head of the timeline.
+        const fresh = (s: { t: number }[]) =>
+          s.length > 1 && now - s[s.length - 1].t < Math.max(venue.intervalSec * 4, 600);
+
         let s = await densePriceSeries(venue.key, since);
-        if (!s.length) s = await rollPriceSeries(venue, since);
-        if (!stop && s.length) priceRef.current = s.map((p) => ({ t: p.t, price: p.price }));
+        if (!fresh(s)) s = await rollPriceSeries(venue, since);
+        if (!fresh(s)) s = await rollPriceSeries(venueOf(`fast-${venue.asset === "ETH" ? "eth" : "btc"}`), since);
+        if (!stop && fresh(s)) priceRef.current = s.map((p) => ({ t: p.t, price: p.price }));
       } catch { /* leave the last good series on screen */ }
     };
+    /**
+     * The head, polled fast.
+     *
+     * A full refetch is a six-thousand-row query and cannot run every second, but the
+     * chart has to move or a sixty-second Window looks frozen. So the whole series is
+     * rebuilt slowly and only the points newer than the last one are appended in
+     * between. `_gt` on the last timestamp means the incremental query is tiny.
+     */
+    const head = async () => {
+      const cur = priceRef.current;
+      const lastT = cur.length ? cur[cur.length - 1].t : 0;
+      if (!lastT) return;
+      try {
+        const add = await densePriceSeries(venue.key, lastT);
+        if (stop || !add.length) return;
+        const fresh = add.filter((p) => p.t > lastT);
+        if (fresh.length) priceRef.current = [...cur, ...fresh].slice(-4000);
+      } catch { /* the next tick tries again */ }
+    };
+
     void run();
-    const t = setInterval(run, venue.intervalSec * 500);
-    return () => { stop = true; clearInterval(t); };
+    const slow = setInterval(run, 30_000);
+    const fast = setInterval(head, 1_500);
+    return () => { stop = true; clearInterval(slow); clearInterval(fast); };
   }, [venue, horizon]);
 
-  const onStrokeEnd = useCallback((pts: DrawPoint[]) => {
-    setErr(null);
-    if (pts.length < 2) { setPreview(null); return; }
+  /**
+   * Is this venue rolling? A series can stall — the 15-minute one did — and the
+   * chain's own token has a series that has never rolled at all. Both look identical
+   * from the picker unless it is asked, and finding out at commit time is too late.
+   */
+  useEffect(() => {
+    let stop = false;
+    setVenueLive(null);
+    /**
+     * Dead only after several misses in a row.
+     *
+     * A 60-second Window genuinely has no openable market for its last dozen
+     * seconds — `minHeadroom` refuses the tail on purpose — so a single miss is
+     * normal operation, not a stalled series. A dormant venue misses every time.
+     */
+    let misses = 0;
+    const probe = async () => {
+      try {
+        const ok = await venueIsLive(venue);
+        if (stop) return;
+        misses = ok ? 0 : misses + 1;
+        if (ok) setVenueLive(true);
+        else if (misses >= 3) setVenueLive(false);
+      } catch { if (!stop) setVenueLive(null); }
+    };
+    void probe();
+    const t = setInterval(probe, 8_000);
+    return () => { stop = true; clearInterval(t); };
+  }, [venue]);
+
+  // A restored Plan brings its Curve back with it.
+  useEffect(() => {
+    if (!plan.restored) return;
+    curveRef.current = plan.restored.curve.length ? [plan.restored.curve] : [];
+    setLegCount(plan.restored.legCount);
+    setVenueKey(plan.restored.venueKey);
+    const i = STAKES.indexOf(BigInt(plan.restored.total) as (typeof STAKES)[number]);
+    if (i >= 0) setStakeIndex(i);
     try {
-      setPreview(curveToPlan(toCurvePoints(pts), {
-        legCount, totalStake: 2_000_000n, minWeightShare: 0.05,
+      setPreview(curveToPlan(toCurvePoints(plan.restored.curve), {
+        legCount: plan.restored.legCount, totalStake: BigInt(plan.restored.total), minWeightShare: 0.05,
       }));
-    } catch (e) { setPreview(null); setErr((e as Error).message); }
-  }, [legCount]);
+    } catch { /* a saved curve that no longer parses is not worth surfacing */ }
+  }, [plan.restored]);
 
   /**
-   * Share the moment, not the page.
+   * Turn whichever gesture is active into a preview Plan.
    *
-   * The device's own canvas is the artefact — it already carries the chart, the Plan
-   * and the skin. Reading it directly avoids a screenshot library and keeps whatever
-   * the user is actually looking at.
+   * Both modes end at the same `Leg[]`; only the input differs. Keeping one rebuild
+   * means the strip, the preview and the commit can never disagree about what the
+   * user just made.
+   */
+  const rebuild = useCallback((m: Mode, lc: number, tot: bigint) => {
+    setDrawErr(null);
+    try {
+      // Flappy is declared on the play key but not built; it must not silently
+      // produce a Plan from whatever the previous mode left behind.
+      if (m === "flappy") { setPreview(null); return; }
+      if (m === "pixel") {
+        if (!hasPositions(cellsRef.current)) { setPreview(null); return; }
+        setPreview(cellsToPlan(cellsRef.current, { totalStake: tot, minWeightShare: 0.05 }).legs);
+        return;
+      }
+      const c = activeCurve();
+      if (c.length < 2) { setPreview(null); return; }
+      setPreview(curveToPlan(toCurvePoints(c), { legCount: lc, totalStake: tot, minWeightShare: 0.05 }));
+    } catch (e) { setPreview(null); setDrawErr((e as Error).message); }
+  }, []);
+
+  const onStrokeEnd = useCallback(() => rebuild(mode, legCount, total), [rebuild, mode, legCount, total]);
+  useEffect(() => { rebuild(mode, legCount, total); }, [mode, legCount, total, rebuild]);
+
+  // The grid is one cell per Window, so changing the Leg count reshapes it. Painted
+  // columns beyond the new width are dropped rather than silently committed.
+  useEffect(() => {
+    const cur = cellsRef.current;
+    const next = emptyCells(legCount);
+    for (let i = 0; i < Math.min(cur.length, legCount); i++) next[i] = cur[i];
+    cellsRef.current = next;
+  }, [legCount]);
+
+  /** The centre key commits whichever gesture is live. */
+  const commit = useCallback(() => {
+    if (mode === "flappy") return;
+    if (mode === "pixel") {
+      const built = cellsToPlan(cellsRef.current, { totalStake: total, minWeightShare: 0.05 });
+      void plan.commitLegs(built.legs, venue, total, cellsRef.current.map((c) => c ?? null));
+      return;
+    }
+    void plan.commit(activeCurve(), toCurvePoints, venue, legCount, total);
+  }, [plan, venue, legCount, total, mode]);
+
+  const onNew = useCallback(() => {
+    plan.reset();
+    curveRef.current = [];
+    cellsRef.current = emptyCells(legCount);
+    setPreview(null);
+  }, [plan, legCount]);
+
+  /**
+   * Share the moment, not the page. The device's canvas already carries the chart,
+   * the Plan and the skin, so reading it directly beats any screenshot library.
    */
   const share = useCallback(async () => {
     const c = document.querySelector<HTMLCanvasElement>(".dev3d-gl");
@@ -87,20 +259,56 @@ export default function Play() {
     window.setTimeout(() => setShared(false), 1800);
   }, []);
 
+  const status = plan.busy ?? plan.err ?? drawErr
+    ?? (venueLive === false
+      ? `No ${venue.asset} market is open on the ${venue.label.toLowerCase()} window right now.`
+      : null);
+
   return (
     <main className="play">
       <DeviceStage
         fill={0.8} particles floatOnly
-        priceRef={priceRef} legsRef={legsRef} curveRef={curveRef}
-        planStartRef={planStartRef} horizonSec={horizon}
-        onStrokeEnd={onStrokeEnd} onLegs={setLegCount}
-        plan={preview ?? undefined}
+        fires={feed.fires}
+        fireState={{
+          scanning: feed.scanning, error: feed.error,
+          hasPlan: plan.planId !== null,
+          nextOpenSec: scheduled ?? (plan.planId !== null ? clock.toOpen : null),
+        }}
+        priceRef={priceRef} legsRef={plan.legsRef} curveRef={curveRef} cellsRef={cellsRef}
+        onMode={setMode}
+        planStartRef={plan.planStartRef} planId={plan.planId}
+        horizonSec={horizon} onStrokeEnd={onStrokeEnd}
+        onLegs={setLegCount} onVenue={setVenueKey} onStake={setStakeIndex}
+        plan={preview ?? undefined} venueLive={venueLive}
+        chain={{
+          address: plan.address, bal: plan.bal, delegated: plan.delegated, dryRun: plan.dryRun,
+          connected: !!plan.address, hasPlan: plan.planId !== null,
+          canCommit: !!preview && !plan.busy && venueLive !== false,
+          connect: plan.connect, faucet: plan.faucet, commit, cancel: plan.cancel, reset: onNew,
+        }}
       />
 
       <div className="play-hud">
         <Link className="play-link" href="/">← Home</Link>
         <Link className="play-link" href="/play/demo">How it works</Link>
       </div>
+
+      <div className="play-actions">
+      <InstallApp />
+      <button
+        className="play-share play-mute"
+        onClick={() => { const v = !muted; setMuted(v); sfx.setEnabled(!v); if (!v) sfx.unlock(); }}
+        title={muted ? "Sound off" : "Sound on"} aria-label={muted ? "Turn sound on" : "Turn sound off"}
+      >
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden>
+          <path d="M4 9.5h3.2L12 5.5v13L7.2 14.5H4a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1Z"
+            stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+          {muted
+            ? <path d="m16.5 9.5 4 5m0-5-4 5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+            : <path d="M15.8 8.6a4.6 4.6 0 0 1 0 6.8M18.4 6.2a8 8 0 0 1 0 11.6"
+                stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />}
+        </svg>
+      </button>
 
       <button className="play-share" onClick={share} title="Share this" aria-label="Share this">
         <svg viewBox="0 0 24 24" fill="none" aria-hidden>
@@ -110,17 +318,32 @@ export default function Play() {
         </svg>
         <span>{shared ? "Saved" : "Share"}</span>
       </button>
+      </div>
 
-      {err && <div className="play-err">{err}</div>}
+      {status && <div className={`play-status ${plan.err || drawErr ? "bad" : ""}`}>{status}</div>}
+      {plan.tx && (
+        <a className="play-tx" href={`${EXPLORER}/tx/${plan.tx}`} target="_blank" rel="noreferrer">
+          Committed in one transaction · {plan.tx.slice(0, 12)}…
+        </a>
+      )}
+      {plan.bal && (
+        <div className="play-bal">
+          {fmtUsdc(plan.bal.usdc, 2)} tUSDC
+          {plan.dryRun !== null && <span className={plan.dryRun ? "" : "live"}>{plan.dryRun ? "dry run" : "live"}</span>}
+        </div>
+      )}
+
+      <div className="play-rotate">Turn your phone for a bigger device</div>
 
       <div className="play-keys">
         <span><kbd>↑↓</kbd>move</span>
-        <span><kbd>↵</kbd>select</span>
+        <span><kbd>↵</kbd>select / commit</span>
         <span><kbd>E</kbd>draw</span>
         <span><kbd>Q</kbd>swap</span>
-        <span><kbd>D</kbd>board</span>
-        <span><kbd>N</kbd>new</span>
-        <span><kbd>←</kbd>back</span>
+        <span><kbd>D</kbd>asset</span>
+        <span><kbd>P</kbd>profile</span>
+        <span><kbd>M</kbd>mode</span>
+        <span><kbd>←</kbd>cancel</span>
       </div>
     </main>
   );

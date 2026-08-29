@@ -3,31 +3,44 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { createDevice, type DeviceId } from "../lib/three/device";
 import { createChartWorld, WORLD, CHART_OFFSET_X, visibleSpanOf } from "../lib/three/stage";
-import { createChart, laneIntervals, type ChartData, type DrawPoint } from "../lib/three/chart";
+import { createChart, timelineInterval, type ChartData, type DrawPoint } from "../lib/three/chart";
 import { bucketize, priceExtent, type Bucket } from "../lib/three/buckets";
 import { GB_H, GB_W, drawGb, type MenuRow } from "../lib/gb";
-import { MAIN_H, MAIN_W, drawBoard, drawControlLarge, rowAtUV } from "../lib/screen";
+import { sfx } from "../lib/sfx";
+import { createChartUi } from "../lib/three/chartUi";
+import { cellAt, type PixelCells } from "../lib/pixel";
+
+/** Curves kept on the chart at once. Beyond this the oldest is dropped. */
+const MAX_CURVES = 6;
+import {
+  MAIN_H, MAIN_W, drawAutonomy, drawBoard, drawControlLarge, optionAtUV, rowAtUV, type FireRow,
+} from "../lib/screen";
 import { createParticles } from "../lib/three/particles";
 import type { Skin } from "../lib/skins";
 import type { LegView, PricePoint } from "../lib/render/types";
 
-export type Mode = "draw" | "pixel";
+export type Mode = "draw" | "pixel" | "flappy";
 export type { DeviceId };
 
 export interface Device3DProps {
   skin: Skin;
   priceRef?: React.RefObject<PricePoint[]>;
   legsRef?: React.RefObject<LegView[]>;
-  curveRef?: React.RefObject<DrawPoint[]>;
+  /** Every drawn Curve, oldest first. The last is the active one. */
+  curveRef?: React.RefObject<DrawPoint[][]>;
+  /** Pixel mode's painted grid. Written in place, like the Curve. */
+  cellsRef?: React.RefObject<PixelCells>;
   planStartRef?: React.RefObject<number | null>;
   planId?: number | null;
   horizonSec?: number;
+  /** The asset on the feed, for the panel's own label. */
+  asset?: string;
   legCount?: number;
   mode?: Mode;
   swapped?: boolean;
   /** True while the pencil is armed: the screen becomes a drawing surface. */
   drawArmed?: boolean;
-  onStrokeEnd?: (pts: DrawPoint[]) => void;
+  onStrokeEnd?: () => void;
   rows?: MenuRow[];
   cursor?: number;
   editing?: boolean;
@@ -47,15 +60,34 @@ export interface Device3DProps {
    */
   floatOnly?: boolean;
   /** Which channel the big screen is showing. */
-  screen?: "chart" | "settings" | "board";
-  /** A tap on the settings glass picks a row. */
+  screen?: "chart" | "settings" | "board" | "autonomy";
+  /** A tap on the settings glass picks a row, or an option from its dropdown. */
   onPickRow?: (i: number) => void;
+  onPickOption?: (row: number, option: number) => void;
+  /** The dropdown currently open on the settings panel. */
+  open?: { row: number; options: readonly string[]; selected: number } | null;
   onSelect?: () => void;
-  board?: { rank: number; who: string; plans: number; hit: string; ret: string }[];
+  board?: { rank: number; who: string; plans: number; hit: string; ret: string; you?: boolean }[];
+  /** True when the standings are illustrative, so the panel can say so. */
+  boardSample?: boolean;
+  /** The Reactivity fire feed — the proof that nobody signed the Legs. */
+  fires?: FireRow[];
+  fireState?: { scanning: boolean; error: string | null; hasPlan: boolean; nextOpenSec: number | null };
   /** Drawn inside the chart screen, and hidden when the chart is not on it. */
   plan?: { direction: "UP" | "DOWN"; stake: bigint }[];
   /** Ambient particle field behind the device, tinted by the skin. */
   particles?: boolean;
+  /** Whether the selected venue has an open Window. `null` while unknown. */
+  venueLive?: boolean | null;
+  /** Wallet balance and committed stake, for the play readout on the second screen. */
+  balance?: bigint | null;
+  stake?: bigint;
+  /**
+   * Where the roller currently sits in its run, and how long that run is. The detent
+   * click is pitched from this, so the ear knows which end of the range it is at.
+   */
+  rollerStep?: number;
+  rollerSpan?: number;
 }
 
 const BODY_W = 14.4;
@@ -103,6 +135,17 @@ export function Device3D(props: Device3DProps) {
     });
     const world = createChartWorld();
     world.setAspect(RT_W / RT_H);
+
+    /**
+     * The chart's own controls, pinned to the display's top-left corner. They live
+     * in the render target, so they are part of the picture the screen shows and are
+     * pressed by touching the glass rather than by a button floating over it.
+     */
+    const chartUi = createChartUi();
+    chartUi.layout(world.camera.fov, RT_W / RT_H);
+    world.camera.add(chartUi.group);
+    /** Head-on, held. Distinct from the transient flatten a drawing gesture causes. */
+    let flatView = false;
     const chart = createChart();
     chart.group.position.x = CHART_OFFSET_X;
     world.scene.add(chart.group);
@@ -136,7 +179,7 @@ export function Device3D(props: Device3DProps) {
     world.camera.add(hud);
     world.scene.add(world.camera);
 
-    const drawHud = (legs: { direction: "UP" | "DOWN"; stake: bigint }[]) => {
+    const drawHud = (legs: { direction: "UP" | "DOWN"; stake: bigint }[], synthetic: number) => {
       const W = hudCanvas.width;
       const H = hudCanvas.height;
       hudCtx.clearRect(0, 0, W, H);
@@ -152,10 +195,31 @@ export function Device3D(props: Device3DProps) {
       hudCtx.font = "700 26px ui-sans-serif, system-ui, sans-serif";
       hudCtx.fillText(`PLAN · ${legs.length} LEGS`, 34, H / 2);
 
+      /**
+       * The autonomy count, on the chart itself.
+       *
+       * The full evidence lives on its own channel, but the claim has to be visible
+       * while the chart is up or the viewer never learns to look for it. This is the
+       * one number that matters: transactions that arrived with no signer.
+       */
+      let rightEdge = W - 34;
+      if (synthetic > 0) {
+        const label = `${synthetic} VALIDATOR FIRE${synthetic === 1 ? "" : "S"}`;
+        hudCtx.font = "800 21px ui-monospace, Menlo, monospace";
+        const bw = hudCtx.measureText(label).width + 34;
+        hudCtx.fillStyle = "rgba(107,255,196,.14)";
+        hudCtx.beginPath();
+        hudCtx.roundRect(W - 30 - bw, H / 2 - 21, bw, 42, 21);
+        hudCtx.fill();
+        hudCtx.fillStyle = "#6bffc4";
+        hudCtx.fillText(label, W - 30 - bw + 17, H / 2 + 1);
+        rightEdge = W - 30 - bw - 20;
+      }
+
       // Fit the legs to the space that is left: an eight-leg Plan must not run off
       // the end of the strip, so the type shrinks rather than the list truncating.
       const startX = 300;
-      const avail = W - startX - 34;
+      const avail = rightEdge - startX;
       const labels = legs.map((l) => `${l.direction === "UP" ? "▲" : "▼"} ${(Number(l.stake) / 1e6).toFixed(2)}`);
       let size = 30;
       let gap = 30;
@@ -224,10 +288,15 @@ export function Device3D(props: Device3DProps) {
       renderer.setSize(w, h, false);
       camera.aspect = w / h;
       const halfFov = THREE.MathUtils.degToRad(camera.fov / 2);
-      const frac = live.current.fill ?? 0.86;
+      // On a narrow frame the device has to take the whole width or its controls
+      // become too small to hit; the caller's fill is a desktop preference.
+      const narrow = w < 760;
+      const frac = narrow ? 0.99 : (live.current.fill ?? 0.86);
       const byW = BODY_W / (frac * 2 * Math.tan(halfFov) * camera.aspect);
       const byH = BODY_H / (frac * 2 * Math.tan(halfFov));
-      camera.position.set(0, 0.25, Math.max(byW, byH));
+      // Portrait: bias to width, and let the body sit higher so the HUD has room.
+      const portrait = h > w;
+      camera.position.set(0, portrait ? 0.1 : 0.25, portrait ? byW : Math.max(byW, byH));
       camera.lookAt(0, 0, 0);
       camera.updateProjectionMatrix();
     };
@@ -236,17 +305,17 @@ export function Device3D(props: Device3DProps) {
     ro.observe(wrap);
 
     // ── lane cache ────────────────────────────────────────────────────────
-    let lanes: Bucket[][] = [[], [], [], []];
-    let ivs = laneIntervals(live.current.horizonSec ?? 360);
+    let buckets: Bucket[] = [];
+    let interval = timelineInterval(live.current.horizonSec ?? 360);
     let extent = { lo: 0, hi: 1 };
-    let laneKey = "";
-    const refreshLanes = (price: PricePoint[], now: number, horizon: number) => {
+    let seriesKey = "";
+    const refreshSeries = (price: PricePoint[], now: number, horizon: number) => {
       const k = `${price.length}:${price.at(-1)?.t ?? 0}:${horizon}`;
-      if (k === laneKey) return;
-      laneKey = k;
-      ivs = laneIntervals(horizon);
-      lanes = ivs.map((iv) => bucketize(price, iv, now - visibleSpanOf(horizon) * (1 - WORLD.futureFraction)));
-      extent = priceExtent(lanes);
+      if (k === seriesKey) return;
+      seriesKey = k;
+      interval = timelineInterval(horizon);
+      buckets = bucketize(price, interval, now - visibleSpanOf(horizon) * (1 - WORLD.futureFraction));
+      extent = priceExtent([buckets]);
     };
 
     // ── pointer ───────────────────────────────────────────────────────────
@@ -303,30 +372,77 @@ export function Device3D(props: Device3DProps) {
       return { u: Math.min(1, Math.max(0, u)), v: Math.min(1, Math.max(0, v)) };
     };
 
+    /**
+     * Paint one column of the grid.
+     *
+     * A drag sets each column it crosses to the row under the pointer, so sweeping
+     * left to right draws a silhouette in one gesture — the same motion as drawing a
+     * Curve, quantised. Only the column under the finger changes, so dragging back
+     * over a column corrects it rather than adding to it.
+     */
+    const paintAt = (h: THREE.Intersection) => {
+      const cells = live.current.cellsRef?.current;
+      const p = screenToCurve(h);
+      if (!cells || !p) return;
+      const { col, row } = cellAt(p.u, p.v, live.current.legCount ?? 6);
+      if (col < cells.length) cells[col] = row;
+    };
+
     const onDown = (e: PointerEvent) => {
+      // The audio context can only be opened inside a gesture, so the first touch
+      // anywhere on the device is what makes the rest of the session audible.
+      sfx.unlock();
       const h = hit(e);
       const id = idOf(h);
       canvas.setPointerCapture(e.pointerId);
+      // The in-screen controls get first refusal on a tap, ahead of drawing and
+      // ahead of the orbit drag — otherwise the button is unreachable while armed.
+      if (id === "screen" && h?.uv && live.current.screen === "chart") {
+        if (chartUi.pick(h.uv, world.camera) === "view") {
+          flatView = !flatView;
+          chartUi.setFlat(flatView);
+          sfx.mode(flatView);
+          return;
+        }
+      }
       if (id === "screen" && live.current.drawArmed && h) {
         drawing = true;
-        const c = live.current.curveRef?.current;
-        if (c) { c.length = 0; const p = screenToCurve(h); if (p) c.push(p); }
+        if (live.current.mode === "pixel") { paintAt(h); return; }
+        const all = live.current.curveRef?.current;
+        if (all) {
+          // Append. Clearing here is what made every new stroke erase the last one.
+          const p = screenToCurve(h);
+          all.push(p ? [p] : []);
+          if (all.length > MAX_CURVES) all.shift();
+        }
         return;
       }
-      // A tap on the settings glass picks the row under it.
+      // A tap on the settings glass. An open dropdown gets first refusal, or a tap
+      // meant for an option would fall through and re-pick the row behind it.
       if (id === "screen" && h?.uv && live.current.screen === "settings") {
+        const open = live.current.open;
+        if (open) {
+          const o = optionAtUV(h.uv.y, open.row, open.options.length);
+          sfx.tap();
+          live.current.onPickOption?.(open.row, o);   // -1 closes without choosing
+          return;
+        }
         const i = rowAtUV(h.uv.y, live.current.rows?.length ?? 0);
-        if (i >= 0) { live.current.onPickRow?.(i); return; }
+        if (i >= 0) { sfx.tap(); live.current.onPickRow?.(i); return; }
       }
       // Dragging the chart glass turns the CHART, not the device.
-      if (id === "screen" && live.current.screen === "chart" && !live.current.freeOrbit) {
+      if (id === "screen" && live.current.screen === "chart" && !live.current.freeOrbit && !flatView) {
         chartOrbit = { x: e.clientX, y: e.clientY };
         return;
       }
       if (id === "bet") { rolling = { y: e.clientY, acc: 0 }; return; }
-      if (id && id !== "screen" && live.current.enabled?.[id as DeviceId] !== false) {
+      if (id && id !== "screen") {
+        // A refused key still answers, and answers differently. Silence here reads
+        // as a broken button rather than a disabled one.
+        if (live.current.enabled?.[id as DeviceId] === false) { sfx.disabled(); return; }
         held = id as DeviceId;
         device.setPressed(held);
+        sfx.press(held);
         return;
       }
       if (!live.current.floatOnly) { orbiting = { x: e.clientX, y: e.clientY }; touched = true; }
@@ -336,8 +452,10 @@ export function Device3D(props: Device3DProps) {
       if (drawing) {
         const h = hit(e);
         if (idOf(h) !== "screen" || !h) return;
+        if (live.current.mode === "pixel") { paintAt(h); return; }
         const p = screenToCurve(h);
-        if (p) live.current.curveRef?.current?.push(p);
+        const all = live.current.curveRef?.current;
+        if (p && all?.length) all[all.length - 1].push(p);
         return;
       }
       if (chartOrbit) {
@@ -353,6 +471,7 @@ export function Device3D(props: Device3DProps) {
         while (Math.abs(rolling.acc) >= DETENT) {
           const step = rolling.acc > 0 ? -1 : 1;
           rolling.acc += step * DETENT;
+          sfx.detent(live.current.rollerStep ?? 0, live.current.rollerSpan ?? 8);
           live.current.onScroll?.(step);
         }
         return;
@@ -371,10 +490,14 @@ export function Device3D(props: Device3DProps) {
     const onUp = (e: PointerEvent) => {
       if (drawing) {
         drawing = false;
-        live.current.onStrokeEnd?.([...(live.current.curveRef?.current ?? [])]);
+        sfx.stroke();
+        // A tap that produced no line leaves an empty Curve behind; drop it.
+        const all = live.current.curveRef?.current;
+        if (all?.length && all[all.length - 1].length < 2) all.pop();
+        live.current.onStrokeEnd?.();
       }
       if (held) {
-        if (idOf(hit(e)) === held) live.current.onKey?.(held);
+        if (idOf(hit(e)) === held) { sfx.release(held); live.current.onKey?.(held); }
         device.setPressed(null);
         held = null;
       }
@@ -393,18 +516,22 @@ export function Device3D(props: Device3DProps) {
       w: "scrollUp", s: "scrollDown",
       Enter: "authorise", " ": "authorise",
       ArrowLeft: "cancel", a: "cancel",
-      ArrowRight: "board", d: "board",
-      n: "new", e: "draw", q: "swap", m: "mode",
+      ArrowRight: "asset", d: "asset",
+      p: "profile", e: "draw", q: "swap", m: "mode",
     };
     const onKeyDown = (ev: KeyboardEvent) => {
       const act = KEYS[ev.key];
       if (!act) return;
       ev.preventDefault();
-      if (act === "scrollUp") { live.current.onScroll?.(-1); return; }
-      if (act === "scrollDown") { live.current.onScroll?.(1); return; }
-      if (live.current.enabled?.[act] === false) return;
+      if (act === "scrollUp" || act === "scrollDown") {
+        sfx.detent(live.current.rollerStep ?? 0, live.current.rollerSpan ?? 8);
+        live.current.onScroll?.(act === "scrollUp" ? -1 : 1);
+        return;
+      }
+      if (live.current.enabled?.[act] === false) { sfx.disabled(); return; }
       device.setPressed(act);
-      window.setTimeout(() => device.setPressed(null), 130);
+      sfx.press(act);
+      window.setTimeout(() => { device.setPressed(null); sfx.release(act); }, 130);
       live.current.onKey?.(act);
     };
     if (hasKeyboard) window.addEventListener("keydown", onKeyDown);
@@ -422,7 +549,7 @@ export function Device3D(props: Device3DProps) {
     let flatten = 0;
     let gbKey = "";
     let skinKey = live.current.skin.key;
-    let wasChannel: "chart" | "settings" | "board" = "chart";
+    let wasChannel: NonNullable<Device3DProps["screen"]> = "chart";
 
     const tick = () => {
       const now = performance.now();
@@ -450,10 +577,15 @@ export function Device3D(props: Device3DProps) {
         device.setMainTexture(channel === "chart" ? rt.texture : panelTex);
       }
       if (channel === "settings") {
-        drawControlLarge(panelCtx, p.rows ?? [], p.cursor ?? 0, !!p.editing, !!p.connected, p.skin, elapsed);
+        drawControlLarge(panelCtx, p.rows ?? [], p.cursor ?? 0, !!p.editing, !!p.connected, p.skin,
+          elapsed, p.open ?? null);
         panelTex.needsUpdate = true;
       } else if (channel === "board") {
-        drawBoard(panelCtx, p.board ?? [], p.skin);
+        drawBoard(panelCtx, p.board ?? [], p.skin, !!p.boardSample);
+        panelTex.needsUpdate = true;
+      } else if (channel === "autonomy") {
+        drawAutonomy(panelCtx, p.fires ?? [], p.skin,
+          p.fireState ?? { scanning: false, error: null, hasPlan: false, nextOpenSec: null });
         panelTex.needsUpdate = true;
       }
 
@@ -461,14 +593,26 @@ export function Device3D(props: Device3DProps) {
       const plan = p.plan ?? [];
       hud.visible = channel === "chart" && plan.length > 0;
       const hk = plan.map((l) => `${l.direction}${l.stake}`).join(",");
-      if (hud.visible && hk !== hudKey) { hudKey = hk; drawHud(plan); }
+      const synthetic = (p.fires ?? []).filter((f) => f.synthetic).length;
+      if (hud.visible && `${hk}|${synthetic}` !== hudKey) {
+        hudKey = `${hk}|${synthetic}`;
+        drawHud(plan, synthetic);
+      }
 
       // The DMG panel is TEXT: redraw only when something on it actually changed.
       // Re-uploading a 320x288 texture every frame for a static panel is pure waste.
       const legs = p.legsRef?.current ?? [];
+      const drawn = p.curveRef?.current ?? [];
+      const drawnKey = drawn.map((c) => c.length).join(".");
+      // With the chart on this panel the feed and the Curve are what move, so the
+      // panel has to tick; with the control page on it, nothing does unless a value
+      // changed. Both cases are the same key, read differently.
+      const live2d = channel !== "chart";
       const k = `${channel}|${p.cursor}|${p.editing}|${p.connected}|${p.mode}|${p.planId}|${p.legCount}|` +
         (p.rows ?? []).map((r) => r.value).join(",") + "|" + legs.map((l) => l.state).join(",") +
-        "|" + (p.swapped || legs.some((l) => l.state === "open") || p.planId === null ? frameNo % 20 : 0);
+        `|${p.open ? `${p.open.row}:${p.open.selected}` : "-"}` +
+        `|${drawnKey}|${p.venueLive}|${p.fires?.length ?? 0}|${p.balance}|${p.stake}` +
+        "|" + (live2d || legs.some((l) => l.state === "open") || p.planId === null ? frameNo % 20 : 0);
       if (k !== gbKey) {
         gbKey = k;
         drawGb(gbCtx, {
@@ -483,6 +627,13 @@ export function Device3D(props: Device3DProps) {
           cursor: p.cursor ?? 0,
           editing: !!p.editing,
           connected: !!p.connected,
+          curves: p.curveRef?.current ?? null,
+          extent,
+          asset: p.asset,
+          playing: channel === "chart",
+          balance: p.balance ?? null,
+          stake: p.stake,
+          venueLive: p.venueLive ?? null,
         });
         device.markScreenDirty();
       }
@@ -490,12 +641,16 @@ export function Device3D(props: Device3DProps) {
       // Chart.
       const nowSec = Date.now() / 1000;
       const horizon = p.horizonSec ?? 360;
-      refreshLanes(p.priceRef?.current ?? [], nowSec, horizon);
-      flatten += ((p.drawArmed ? 1 : 0) - flatten) * Math.min(1, dt * 3.4);
+      refreshSeries(p.priceRef?.current ?? [], nowSec, horizon);
+      // Drawing flattens transiently; the toggle holds it. Either wants head-on.
+      flatten += ((flatView || p.drawArmed ? 1 : 0) - flatten) * Math.min(1, dt * 3.4);
       world.setFlatten(flatten);
       const data: ChartData = {
-        lanes, laneIntervals: ivs, extent, now: nowSec, horizonSec: horizon,
-        legs, curve: p.curveRef?.current?.length ? p.curveRef.current : null,
+        buckets, interval, extent, now: nowSec, horizonSec: horizon,
+        tint: p.skin.lanes[0],
+        legs, curves: p.curveRef?.current?.length ? p.curveRef.current : null,
+        cells: p.mode === "pixel" ? (p.cellsRef?.current ?? null) : null,
+        legCount: p.legCount ?? 6,
         planStart: p.planStartRef?.current ?? null,
       };
       chart.update(data, elapsed);
@@ -532,12 +687,14 @@ export function Device3D(props: Device3DProps) {
       canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("pointerup", onUp);
       canvas.removeEventListener("pointercancel", onUp);
+      chartUi.dispose();
       hudTex.dispose();
       hud.geometry.dispose();
       (hud.material as THREE.Material).dispose();
       panelTex.dispose();
       field.dispose();
       device.dispose();
+      chart.dispose();
       world.dispose();
       rt.dispose();
       floor.geometry.dispose();

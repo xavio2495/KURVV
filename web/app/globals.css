@@ -163,9 +163,12 @@ a { color: inherit; text-decoration: none; }
   .board-row > :nth-child(5), .board-row > :nth-child(6) { display: none; }
 }
 
-/* Share the current frame of the device. */
-.play-share {
+/* Share the current frame of the device, and silence it. */
+.play-actions {
   position: absolute; top: 14px; right: 18px; z-index: 3;
+  display: flex; align-items: center; gap: 8px;
+}
+.play-share {
   display: flex; align-items: center; gap: 8px; cursor: pointer;
   padding: 8px 14px 8px 11px; border-radius: 999px;
   border: 1px solid rgba(255,255,255,.16); background: rgba(14,12,24,.72);
@@ -176,6 +179,8 @@ a { color: inherit; text-decoration: none; }
 .play-share svg { width: 17px; height: 17px; }
 .play-share:hover { color: #fff; border-color: rgba(255,255,255,.42); }
 .play-share:active { transform: translateY(1px); }
+.play-mute { padding: 8px 11px; }
+.play-mute svg { width: 18px; height: 18px; }
 
 /* Keyboard hint, shown only where a keyboard exists. */
 .play-keys {
@@ -189,3 +194,79 @@ a { color: inherit; text-decoration: none; }
   border: 1px solid #2a2540; background: rgba(255,255,255,.04); color: #8f8aa8;
 }
 @media (pointer: coarse) { .play-keys { display: none; } }
+
+/* ── play: status, balance, receipt ────────────────────────────────────────── */
+.play-status {
+  position: absolute; left: 20px; bottom: 20px; z-index: 3; max-width: min(52ch, 74vw);
+  padding: 9px 14px; border-radius: 10px; font-size: 12px; line-height: 1.5;
+  background: rgba(14,12,24,.86); border: 1px solid #24203a; color: #b8b3cc;
+  backdrop-filter: blur(8px);
+}
+.play-status.bad { border-color: #5b2b3a; color: #ff9b9b; }
+.play-tx {
+  position: absolute; left: 20px; bottom: 66px; z-index: 3;
+  font-size: 11.5px; color: #6bffc4; word-break: break-all;
+}
+.play-bal {
+  position: absolute; top: 58px; right: 18px; z-index: 3;
+  display: flex; align-items: center; gap: 8px;
+  font-size: 11.5px; color: #8f8aa8; font-variant-numeric: tabular-nums;
+}
+.play-bal span {
+  padding: 1px 7px; border-radius: 999px; font-size: 9px; letter-spacing: .12em;
+  text-transform: uppercase; border: 1px solid #3a3358; color: #6b6486;
+}
+.play-bal span.live { border-color: #6bffc4; color: #6bffc4; }
+
+/* ── mobile: the play surface is the whole screen ──────────────────────────── */
+@media (max-width: 760px) {
+  .play { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+  .play-hud { top: calc(10px + env(safe-area-inset-top)); left: 12px; gap: 12px; }
+  .play-link { font-size: 10.5px; }
+  .play-actions { top: calc(8px + env(safe-area-inset-top)); right: 12px; gap: 6px; }
+  .play-share { padding: 9px 12px 9px 10px; font-size: 10.5px; }
+  .play-mute { padding: 9px 10px; }
+  .play-share span { display: none; }
+  .play-share svg { width: 19px; height: 19px; }
+  .play-bal { top: calc(46px + env(safe-area-inset-top)); right: 12px; font-size: 10.5px; }
+  .play-status { left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); max-width: none; }
+  .play-tx { left: 12px; bottom: calc(58px + env(safe-area-inset-bottom)); font-size: 10.5px; }
+
+  .home { padding: 0 18px 44px; }
+  .home-copy h1 { font-size: 42px; }
+  .home-lede { font-size: 15px; }
+  .home-hero { min-height: auto; padding-top: 40px; gap: 20px; }
+  .pitch { padding: 0 18px 60px; }
+  .pitch-hero h1 { font-size: 40px; }
+  .pitch-slide h2 { font-size: 24px; }
+  .pitch-slide p { font-size: 15px; }
+  .demo-tip { width: min(300px, 86vw); }
+}
+
+/* A phone held upright gives the landscape device very little height. */
+.play-rotate {
+  position: absolute; left: 50%; bottom: calc(14px + env(safe-area-inset-bottom));
+  transform: translateX(-50%); z-index: 3; display: none;
+  padding: 7px 13px; border-radius: 999px; white-space: nowrap;
+  background: rgba(14,12,24,.86); border: 1px solid #24203a; backdrop-filter: blur(8px);
+  font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: #8f8aa8;
+}
+@media (max-width: 760px) and (orientation: portrait) {
+  .play-rotate { display: block; }
+  .play-keys { display: none; }
+}
+
+/* Install-as-app, and the iOS instruction that replaces it where there is no prompt. */
+.play-install { padding: 8px 13px 8px 10px; }
+.play-ios-hint {
+  position: absolute; top: 58px; right: 18px; z-index: 4; margin: 0; max-width: 30ch;
+  padding: 9px 13px; border-radius: 10px; font-size: 11.5px; line-height: 1.5;
+  background: rgba(14,12,24,.92); border: 1px solid #2a2540; color: #b8b3cc;
+  backdrop-filter: blur(8px);
+}
+.play-ios-hint strong { color: #fff; font-weight: 600; }
+@media (max-width: 760px) {
+  .play-install span { display: none; }
+  .play-install { padding: 9px 10px; }
+  .play-ios-hint { top: calc(46px + env(safe-area-inset-top)); right: 12px; }
+}
