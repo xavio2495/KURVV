@@ -33,6 +33,8 @@ export interface Device3DProps {
   cellsRef?: React.RefObject<PixelCells>;
   /** Flappy mode's gates and flight, already normalised. */
   gates?: Omit<GatesData, "rect"> | null;
+  /** How the rehearsal did, for the strip and the panel. */
+  score?: { hit: number; resolved: number; placed: number } | null;
   planStartRef?: React.RefObject<number | null>;
   planId?: number | null;
   horizonSec?: number;
@@ -187,7 +189,11 @@ export function Device3D(props: Device3DProps) {
     world.camera.add(hud);
     world.scene.add(world.camera);
 
-    const drawHud = (legs: { direction: "UP" | "DOWN"; stake: bigint }[], synthetic: number) => {
+    const drawHud = (
+      legs: { direction: "UP" | "DOWN"; stake: bigint }[],
+      synthetic: number,
+      score: { hit: number; resolved: number; placed: number } | null,
+    ) => {
       const W = hudCanvas.width;
       const H = hudCanvas.height;
       hudCtx.clearRect(0, 0, W, H);
@@ -211,7 +217,21 @@ export function Device3D(props: Device3DProps) {
        * one number that matters: transactions that arrived with no signer.
        */
       let rightEdge = W - 34;
-      if (synthetic > 0) {
+      // The rehearsal's result, in the same slot the validator count uses — only one
+      // of the two can be true at a time, since a run is not a committed Plan.
+      if (score && score.placed) {
+        const label = `HIT ${score.hit}/${score.resolved}`;
+        hudCtx.font = "800 21px ui-monospace, Menlo, monospace";
+        const bw = hudCtx.measureText(label).width + 34;
+        const good = score.resolved > 0 && score.hit * 2 >= score.resolved;
+        hudCtx.fillStyle = good ? "rgba(107,255,196,.14)" : "rgba(255,106,122,.14)";
+        hudCtx.beginPath();
+        hudCtx.roundRect(W - 30 - bw, H / 2 - 21, bw, 42, 21);
+        hudCtx.fill();
+        hudCtx.fillStyle = good ? "#6bffc4" : "#ff6a7a";
+        hudCtx.fillText(label, W - 30 - bw + 17, H / 2 + 1);
+        rightEdge = W - 30 - bw - 20;
+      } else if (synthetic > 0) {
         const label = `${synthetic} VALIDATOR FIRE${synthetic === 1 ? "" : "S"}`;
         hudCtx.font = "800 21px ui-monospace, Menlo, monospace";
         const bw = hudCtx.measureText(label).width + 34;
@@ -413,6 +433,16 @@ export function Device3D(props: Device3DProps) {
           return;
         }
       }
+      if (id === "screen" && h?.uv && live.current.onFlap) {
+        // Upper half is up, lower half is down. The one gesture a phone can make.
+        const up = h.uv.y >= 0.5;
+        const key: DeviceId = up ? "profile" : "draw";
+        device.setPressed(key);
+        sfx.press(key);
+        window.setTimeout(() => { device.setPressed(null); sfx.release(key); }, 110);
+        live.current.onFlap(up);
+        return;
+      }
       if (id === "screen" && live.current.drawArmed && h) {
         drawing = true;
         if (live.current.mode === "pixel") { paintAt(h); return; }
@@ -612,14 +642,31 @@ export function Device3D(props: Device3DProps) {
         panelTex.needsUpdate = true;
       }
 
+      /**
+       * What the screen says it is.
+       *
+       * Only the modes that change the screen's rules announce themselves; draw is
+       * the resting state and does not need a label sitting over its own chart.
+       */
+      chartUi.setBanner(
+        channel !== "chart" ? null
+        : p.mode === "flappy"
+          ? (p.onFlap ? "FLY \u00b7 TAP TOP OR BOTTOM" : "FLAPPY \u00b7 PRESS DRAW TO FLY")
+          : p.mode === "pixel"
+            ? (p.drawArmed ? "GRID \u00b7 DRAG TO PAINT" : "GRID \u00b7 PRESS DRAW")
+            : null,
+      );
+
       // The strip belongs to the chart: it goes when the chart goes.
       const plan = p.plan ?? [];
       hud.visible = channel === "chart" && plan.length > 0;
       const hk = plan.map((l) => `${l.direction}${l.stake}`).join(",");
       const synthetic = (p.fires ?? []).filter((f) => f.synthetic).length;
-      if (hud.visible && `${hk}|${synthetic}` !== hudKey) {
-        hudKey = `${hk}|${synthetic}`;
-        drawHud(plan, synthetic);
+      const sc = p.mode === "flappy" ? (p.score ?? null) : null;
+      const scKey = sc ? `${sc.hit}/${sc.resolved}/${sc.placed}` : "-";
+      if (hud.visible && `${hk}|${synthetic}|${scKey}` !== hudKey) {
+        hudKey = `${hk}|${synthetic}|${scKey}`;
+        drawHud(plan, synthetic, sc);
       }
 
       // The DMG panel is TEXT: redraw only when something on it actually changed.
@@ -655,6 +702,7 @@ export function Device3D(props: Device3DProps) {
           asset: p.asset,
           playing: channel === "chart",
           running: !!p.onFlap,
+          score: p.mode === "flappy" ? (p.score ?? null) : null,
           balance: p.balance ?? null,
           stake: p.stake,
           venueLive: p.venueLive ?? null,

@@ -207,6 +207,8 @@ export interface GbState {
   playing?: boolean;
   /** True while a flappy run is sweeping. */
   running?: boolean;
+  /** How the rehearsal did. `resolved` excludes voided and unsettled Windows. */
+  score?: { hit: number; resolved: number; placed: number } | null;
   /** Wallet balance in collateral base units, shown while playing. */
   balance?: bigint | null;
   /** Total stake the Plan will commit, in base units. */
@@ -282,7 +284,12 @@ export function drawGb(g: CanvasRenderingContext2D, s: GbState) {
         : s.mode === "pixel" ? "paint a grid" : "draw a curve";
       // A rehearsal grades against Windows that already settled; committing applies
       // the same pattern to the next ones. Saying so is the whole honesty of it.
-      const line2 = s.mode === "flappy" ? "rehearsal \u00b7 past windows" : "scroll = stake";
+      // Once a run has placed gates, the score IS the payoff — say it, do not make
+      // the player count coloured plates.
+      const sc = s.score;
+      const line2 = s.mode === "flappy"
+        ? (sc && sc.placed ? `hit ${sc.hit}/${sc.resolved} \u00b7 rehearsal` : "rehearsal \u00b7 past windows")
+        : "scroll = stake";
       text(g, line1, 4 * U, stripY + 3 * U, GB.lightest);
       text(g, line2, 4 * U, stripY + 12 * U, GB.light);
     } else {

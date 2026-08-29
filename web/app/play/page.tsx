@@ -307,7 +307,7 @@ export default function Play() {
         horizonSec={horizon} onStrokeEnd={onStrokeEnd}
         onLegs={setLegCount} onVenue={setVenueKey} onStake={setStakeIndex}
         plan={preview ?? undefined} venueLive={venueLive}
-        gates={flappy.view} onStartRun={flappy.start}
+        gates={flappy.view} onStartRun={flappy.start} score={mode === "flappy" ? flappy.score : null}
         onFlap={flappy.running ? flappy.tap : null}
         chain={{
           address: plan.address, bal: plan.bal, delegated: plan.delegated, dryRun: plan.dryRun,

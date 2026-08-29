@@ -56,6 +56,7 @@ interface Props {
   gates?: Omit<GatesData, "rect"> | null;
   onFlap?: ((up: boolean) => void) | null;
   onStartRun?: () => void;
+  score?: { hit: number; resolved: number; placed: number } | null;
   /** The Reactivity fire feed and its state, for the autonomy channel. */
   fires?: FireRow[];
   fireState?: { scanning: boolean; error: string | null; hasPlan: boolean; nextOpenSec: number | null };
@@ -195,7 +196,7 @@ export function DeviceStage(p: Props) {
       floatOnly={p.floatOnly} board={board.rows} boardSample={board.sample}
       plan={p.plan} venueLive={p.venueLive ?? null}
       fires={p.fires} fireState={p.fireState}
-      gates={p.gates} onFlap={p.onFlap ?? null}
+      gates={p.gates} onFlap={p.onFlap ?? null} score={p.score ?? null}
       balance={chain?.bal?.usdc ?? null} stake={DEFAULTS.stakes[menu.stakeIndex]}
       onPickRow={(i) => {
         menu.setCursor(i);
