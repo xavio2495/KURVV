@@ -28,6 +28,32 @@ const FONT = `${8 * GB_SCALE}px "Courier New", ui-monospace, monospace`;
 /** The control rows carry the settings, so they get their own larger size. */
 const FONT_BIG = `bold ${11 * GB_SCALE}px "Courier New", ui-monospace, monospace`;
 
+/** The play readout is read at a glance across a room; it gets the largest face. */
+const FONT_HUGE = `bold ${17 * GB_SCALE}px "Courier New", ui-monospace, monospace`;
+
+export function textBig(g: CanvasRenderingContext2D, s: string, x: number, y: number, tone: string = GB.darkest) {
+  g.fillStyle = tone;
+  g.font = FONT_HUGE;
+  g.textBaseline = "top";
+  g.fillText(s.toUpperCase(), Math.round(x), Math.round(y));
+}
+
+/** One pip per Leg — an unattended chain advancing is visible at a glance. */
+export function legPips(
+  g: CanvasRenderingContext2D,
+  legs: { state: string }[],
+  x: number, y: number,
+) {
+  legs.forEach((l, i) => {
+    const px = x + i * 7 * GB_SCALE;
+    const tone = l.state === "won" ? GB.lightest
+      : l.state === "lost" ? GB.darkest
+      : l.state === "open" ? GB.light : GB.dark;
+    fill(g, px, y, 5 * GB_SCALE, 5 * GB_SCALE, tone);
+    frame(g, px, y, 5 * GB_SCALE, 5 * GB_SCALE);
+  });
+}
+
 export function clear(g: CanvasRenderingContext2D) {
   g.fillStyle = GB.lightest;
   g.fillRect(0, 0, GB_W, GB_H);
@@ -63,6 +89,17 @@ export function priceChart(
   g: CanvasRenderingContext2D,
   points: { t: number; price: number }[],
   x: number, y: number, w: number, h: number,
+  curves?: { u: number; v: number }[][] | null,
+  /**
+   * The extent the 3D stage mapped the Curve against.
+   *
+   * WITHOUT IT THE CURVE IS DRAWN ON A DIFFERENT SCALE. A drawn point's `v` is
+   * normalised against the stage's padded extent, but this panel derives its own
+   * lo/hi from its own samples — so mapping `v` onto this panel's height put the
+   * Curve at a height that had nothing to do with where the price line ended, and
+   * the two lines visibly failed to meet.
+   */
+  extent?: { lo: number; hi: number } | null,
 ) {
   if (points.length < 2) {
     text(g, "no feed", x + 4, y + h / 2 - 4, GB.dark);
@@ -71,19 +108,27 @@ export function priceChart(
   let lo = Infinity;
   let hi = -Infinity;
   for (const p of points) { if (p.price < lo) lo = p.price; if (p.price > hi) hi = p.price; }
+  // Share the stage's extent when there is one, so both lines use one scale.
+  if (extent && extent.hi > extent.lo) { lo = Math.min(lo, extent.lo); hi = Math.max(hi, extent.hi); }
   const span = Math.max(hi - lo, 1e-9);
   const t0 = points[0].t;
   const t1 = points[points.length - 1].t;
   const tSpan = Math.max(t1 - t0, 1);
 
+  // The same split the 3D stage uses: observed price on the left, the drawn future
+  // on the right. Without it a Curve has nowhere on this panel to go.
+  const FUTURE = 0.32;
+  const drawn = (curves ?? []).filter((c) => c.length > 1);
+  const nowX = drawn.length ? x + w * (1 - FUTURE) : x + w;
+  const pw = nowX - x;
+  const yOf = (price: number) => y + h - ((price - lo) / span) * h;
+
   // Baseline shading, so the line has a body rather than floating.
   g.fillStyle = GB.light;
   g.beginPath();
   g.moveTo(x, y + h);
-  for (const p of points) {
-    g.lineTo(x + ((p.t - t0) / tSpan) * w, y + h - ((p.price - lo) / span) * h);
-  }
-  g.lineTo(x + w, y + h);
+  for (const p of points) g.lineTo(x + ((p.t - t0) / tSpan) * pw, yOf(p.price));
+  g.lineTo(nowX, y + h);
   g.closePath();
   g.fill();
 
@@ -91,17 +136,48 @@ export function priceChart(
   g.lineWidth = 1;
   g.beginPath();
   points.forEach((p, i) => {
-    const px = x + ((p.t - t0) / tSpan) * w;
-    const py = y + h - ((p.price - lo) / span) * h;
+    const px = x + ((p.t - t0) / tSpan) * pw;
+    const py = yOf(p.price);
     i === 0 ? g.moveTo(px, py) : g.lineTo(px, py);
   });
   g.stroke();
+
+  if (!drawn.length) return;
+
+  // `now`, then the Curves — dotted, because on this panel they are the lines that
+  // have not happened yet and the four tones carry no other way to say so.
+  g.strokeStyle = GB.dark;
+  g.lineWidth = 1;
+  g.setLineDash([1 * GB_SCALE, 2 * GB_SCALE]);
+  g.beginPath();
+  g.moveTo(nowX, y);
+  g.lineTo(nowX, y + h);
+  g.stroke();
+
+  const lastY = yOf(points[points.length - 1].price);
+  drawn.forEach((curve, ci) => {
+    // The newest Curve is the one that commits, so it is the solid-dark one; the
+    // rest are kept as lighter ghosts to compare against.
+    const active = ci === drawn.length - 1;
+    g.strokeStyle = active ? GB.darkest : GB.dark;
+    g.lineWidth = active ? 2 : 1;
+    g.setLineDash(active ? [2 * GB_SCALE, 2 * GB_SCALE] : [1 * GB_SCALE, 3 * GB_SCALE]);
+    g.beginPath();
+    // Anchor at the live price. A Curve is drawn as a continuation of the line, and
+    // a gap between where price IS and where the user says it goes reads as a bug.
+    g.moveTo(nowX, lastY);
+    curve.forEach((p) => {
+      g.lineTo(nowX + p.u * (x + w - nowX), y + h - p.v * h);
+    });
+    g.stroke();
+  });
+  g.setLineDash([]);
 }
 
 
 /** One row of the control panel. */
 export interface MenuRow {
-  id: "wallet" | "stake" | "legs" | "window" | "token" | "skin";
+  id: "wallet" | "name" | "stake" | "legs" | "window" | "token" | "skin";
   label: string;
   value: string;
   /** A row whose value the scroll can change once it is selected. */
@@ -115,7 +191,24 @@ export interface GbState {
   legs: { direction: "UP" | "DOWN"; state: string; paid?: bigint }[];
   planId: number | null;
   legCount: number;
-  mode: "draw" | "pixel";
+  mode: "draw" | "pixel" | "flappy";
+  /** The drawn Curves, normalised. Dotted here: they have not happened yet. */
+  curves?: { u: number; v: number }[][] | null;
+  /** The stage's price extent, so both lines share one vertical scale. */
+  extent?: { lo: number; hi: number } | null;
+  /** Which asset the chart is showing. */
+  asset?: string;
+  /** Whether the chosen venue has an open Window. `null` while unknown. */
+  venueLive?: boolean | null;
+  /**
+   * True while the chart holds the main display — the state the user plays in.
+   * The panel then carries only what a player needs mid-gesture, not the settings.
+   */
+  playing?: boolean;
+  /** Wallet balance in collateral base units, shown while playing. */
+  balance?: bigint | null;
+  /** Total stake the Plan will commit, in base units. */
+  stake?: bigint;
   frameNo: number;
   /** Control panel. */
   rows: MenuRow[];
@@ -140,14 +233,57 @@ export function drawGb(g: CanvasRenderingContext2D, s: GbState) {
 
   // Status bar.
   fill(g, 0, 0, GB_W, 11 * U, GB.dark);
-  text(g, s.showChart ? "BTC/USD" : "KURVV", 3 * U, 2 * U, GB.lightest);
+  text(g, s.showChart ? `${s.asset ?? "BTC"}/USD` : "KURVV", 3 * U, 2 * U, GB.lightest);
   text(g, s.connected ? "LINKED" : "NO LINK", GB_W - 52 * U, 2 * U, GB.lightest);
 
   if (s.showChart) {
-    priceChart(g, s.points, 3 * U, 14 * U, GB_W - 6 * U, GB_H - 28 * U);
+    priceChart(g, s.points, 3 * U, 14 * U, GB_W - 6 * U, GB_H - 28 * U, s.curves, s.extent);
     const last = s.points[s.points.length - 1];
     text(g, last ? `$${Math.round(last.price)}` : "----", 3 * U, GB_H - 11 * U, GB.darkest);
     text(g, `${s.points.length}PT`, GB_W - 34 * U, GB_H - 11 * U, GB.dark);
+    return;
+  }
+
+  /**
+   * PLAY MODE — three numbers and nothing else.
+   *
+   * While the chart is on the main display the user is drawing, not configuring, and
+   * a six-row settings list on the second screen is a list nobody is reading. The
+   * settings surface is one swap away and is touch-driven there; here the panel
+   * answers only the questions a player asks mid-gesture: what am I risking, what do
+   * I have, and how many Legs will it become.
+   */
+  if (s.playing) {
+    const money = (v: bigint | null | undefined, dp = 2) =>
+      v === null || v === undefined ? "----" : (Number(v) / 1e6).toFixed(dp);
+
+    const big = (label: string, value: string, y: number, invert = false) => {
+      if (invert) fill(g, 2 * U, y - 2 * U, GB_W - 4 * U, 22 * U, GB.light);
+      text(g, label, 6 * U, y, invert ? GB.darkest : GB.dark);
+      textBig(g, value, 6 * U, y + 8 * U, GB.darkest);
+    };
+
+    big("STAKE", `$${money(s.stake)}`, 18 * U, true);
+    big("BALANCE", `$${money(s.balance)}`, 46 * U);
+    big("LEGS", String(s.legCount), 74 * U);
+
+    // The Plan's own state still belongs here — it is the one thing that changes
+    // without the user touching anything.
+    const stripY = GB_H - 22 * U;
+    fill(g, 0, stripY, GB_W, 22 * U, GB.dark);
+    if (s.venueLive === false) {
+      text(g, "no market open", 4 * U, stripY + 3 * U, GB.lightest);
+      text(g, `${s.asset ?? ""} window closed`, 4 * U, stripY + 12 * U, GB.light);
+    } else if (s.planId === null) {
+      text(g, s.mode === "flappy" ? "flappy \u00b7 soon"
+        : s.mode === "pixel" ? "paint a grid" : "draw a curve", 4 * U, stripY + 3 * U, GB.lightest);
+      text(g, "scroll = stake", 4 * U, stripY + 12 * U, GB.light);
+    } else {
+      const done = s.legs.filter((l) => l.state === "won" || l.state === "lost").length;
+      text(g, `plan #${s.planId}`, 4 * U, stripY + 3 * U, GB.lightest);
+      text(g, `${done}/${s.legs.length} settled`, 4 * U, stripY + 12 * U, GB.light);
+      legPips(g, s.legs, GB_W - 4 * U - s.legs.length * 7 * U, stripY + 12 * U);
+    }
     return;
   }
 
@@ -171,8 +307,11 @@ export function drawGb(g: CanvasRenderingContext2D, s: GbState) {
   const stripY = GB_H - 24 * U;
   fill(g, 0, stripY, GB_W, 24 * U, GB.dark);
   if (s.planId === null) {
-    text(g, "no plan \u00b7 press draw", 4 * U, stripY + 3 * U, GB.lightest);
-    text(g, `legs ${s.legCount}`, 4 * U, stripY + 13 * U, GB.light);
+    // A dormant series is the one state that must never look like an idle one: the
+    // draw key would work and the commit would fail minutes later.
+    const dead = s.venueLive === false;
+    text(g, dead ? "no market open" : "no plan \u00b7 press draw", 4 * U, stripY + 3 * U, GB.lightest);
+    text(g, dead ? `${s.asset ?? ""} window closed` : `legs ${s.legCount}`, 4 * U, stripY + 13 * U, GB.light);
   } else {
     const done = s.legs.filter((l) => l.state === "won" || l.state === "lost").length;
     const open = s.legs.filter((l) => l.state === "open").length;
