@@ -4,6 +4,7 @@ import { Device3D, type DeviceId, type Mode } from "./Device3D";
 import { useDeviceMenu, DEFAULTS } from "../lib/useDeviceMenu";
 import { SKINS, skinByKey } from "../lib/skins";
 import { ASSETS, venueKeyOf, windowsFor, type Venue } from "../lib/venues";
+import { HANDLE_VARIANTS } from "../lib/handle";
 import { sfx } from "../lib/sfx";
 import { useBoard } from "../lib/useBoard";
 import type { DrawPoint } from "../lib/three/chart";
@@ -87,7 +88,9 @@ export function DeviceStage(p: Props) {
   const chain = p.chain;
   // Re-read the standings whenever this wallet's own Plan count changes: the row it
   // just earned should be there when the trophy key is pressed, not 25 seconds later.
-  const board = useBoard(chain?.address, chain?.hasPlan ? 1 : 0);
+  // Keyed by planId, not by "has a Plan": a boolean flips once and a SECOND Plan
+  // would never refresh the standings it just changed.
+  const board = useBoard(chain?.address, p.planId ?? -1);
   const menu = useDeviceMenu(skin, (k) => { setSkinKey(k); p.onSkin?.(k); }, DEFAULTS, {
     address: chain?.address,
     walletLabel: chain
@@ -138,7 +141,14 @@ export function DeviceStage(p: Props) {
      * bolt already means "send it" — giving commit its own key would leave the most
      * important action on the least obvious control.
      */
-    onCommit: () => { if (screen === "chart" && chain?.canCommit) { sfx.commit(); chain.commit(); } },
+    onCommit: () => {
+      // The chart owns the centre key outright while it is up — including when there
+      // is nothing to commit, where the answer is an audible refusal rather than a
+      // silent edit-mode toggle on a row the user cannot currently see.
+      if (screen !== "chart") return false;
+      if (chain?.canCommit) { sfx.commit(); chain.commit(); } else sfx.disabled();
+      return true;
+    },
   });
 
   // Reporting up must NOT happen during render: calling the parent's setState from
@@ -174,15 +184,19 @@ export function DeviceStage(p: Props) {
    * the rows, or the value inside the row being edited. The detent click is pitched
    * from it, so the ear can tell the top of a range from the bottom.
    */
+  // Keyed by row ID, never by position. The NAME row appears only once a wallet is
+  // connected, so a positional table silently shifts by one and every row below
+  // WALLET reports the range of its neighbour.
+  const rollerRanges: Partial<Record<string, [number, number]>> = {
+    name: [menu.nameVariant, HANDLE_VARIANTS],
+    stake: [menu.stakeIndex, DEFAULTS.stakes.length],
+    legs: [DEFAULTS.legChoices.indexOf(menu.legs), DEFAULTS.legChoices.length],
+    window: [menu.windowIndex, windowsFor(menu.tokenIndex).length],
+    token: [menu.tokenIndex, DEFAULTS.tokenChoices.length],
+    skin: [SKINS.findIndex((k) => k.key === skinKey), SKINS.length],
+  };
   const [rollerStep, rollerSpan] = menu.editing
-    ? ([
-        [0, 1],
-        [menu.stakeIndex, DEFAULTS.stakes.length],
-        [DEFAULTS.legChoices.indexOf(menu.legs), DEFAULTS.legChoices.length],
-        [menu.windowIndex, windowsFor(menu.tokenIndex).length],
-        [menu.tokenIndex, DEFAULTS.tokenChoices.length],
-        [SKINS.findIndex((k) => k.key === skinKey), SKINS.length],
-      ][menu.cursor] ?? [0, 1])
+    ? (rollerRanges[menu.rows[menu.cursor]?.id ?? ""] ?? [0, 1])
     : [menu.cursor, menu.rows.length];
 
   return (

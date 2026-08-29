@@ -69,7 +69,8 @@ export function useDeviceMenu(
     onAsset?: () => void;
     onProfile?: () => void;
     onCancel?: () => void;
-    onCommit?: () => void;
+    /** Returns true if the caller claimed the press, leaving the rows untouched. */
+    onCommit?: () => boolean;
     onConnect?: () => void;
   } = {},
 ): MenuState {
@@ -165,11 +166,12 @@ export function useDeviceMenu(
   }, [opts.stakes.length]);
 
   const nextToken = useCallback(() => {
-    setTokenIndex((i) => {
-      const next = (i + 1) % opts.tokenChoices.length;
-      setWindowIndex((w) => Math.min(w, windowsFor(next).length - 1));
-      return next;
-    });
+    // Both updaters at the top level: a `setState` nested inside another updater runs
+    // twice under StrictMode, and an updater is required to be pure.
+    const next = (s.current.tokenIndex + 1) % opts.tokenChoices.length;
+    setTokenIndex(next);
+    setWindowIndex((w) => Math.min(w, windowsFor(next).length - 1));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [opts.tokenChoices.length]);
 
   /**
@@ -226,16 +228,26 @@ export function useDeviceMenu(
   const press = useCallback((id: DeviceId) => {
     const c = s.current;
     switch (id) {
+      // The centre key is contextual and always does something, but it must do only
+      // ONE thing. It used to run the row action AND fall through to `onCommit`, so a
+      // press on WALLET fired the faucet and the commit together, and a press on any
+      // other row toggled edit mode nobody asked for on the way past.
+      //
+      // Which surface owns the key is a question only the caller can answer, so
+      // `onCommit` reports whether it claimed the press. The rows move only if it
+      // did not.
       case "authorise":
+        if (hooks.onCommit?.()) break;
         if (idAt(c.cursor) === "wallet") { setConnected((v) => !v); hooks.onConnect?.(); }
         else setEditing((v) => !v);
-        hooks.onCommit?.();
         break;
       case "profile": setEditing(false); hooks.onProfile?.(); break;
       case "cancel": setEditing(false); hooks.onCancel?.(); break;
       case "draw": setEditing(false); hooks.onDraw?.(); break;
       case "asset": hooks.onAsset?.(); break;
-      case "swap": hooks.onSwap?.(); break;
+      // Leaving edit mode armed would hand the wheel to the stake dial on the chart
+      // while the settings row it was editing still claims the detent range.
+      case "swap": setEditing(false); hooks.onSwap?.(); break;
       case "mode": hooks.onMode?.(); break;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

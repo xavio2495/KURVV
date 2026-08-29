@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
-import { createDevice, type DeviceId } from "../lib/three/device";
+import { createDevice, DEVICE_IDS, type DeviceId } from "../lib/three/device";
 import { createChartWorld, WORLD, CHART_OFFSET_X, visibleSpanOf } from "../lib/three/stage";
 import { createChart, timelineInterval, type ChartData, type DrawPoint } from "../lib/three/chart";
 import { bucketize, priceExtent, type Bucket } from "../lib/three/buckets";
@@ -565,6 +565,14 @@ export function Device3D(props: Device3DProps) {
     const onKeyDown = (ev: KeyboardEvent) => {
       const act = KEYS[ev.key];
       if (!act) return;
+      // These bindings are for the device, not for the page. Without this guard the
+      // handler swallows Space and Enter everywhere — tabbing to Share, Sound or
+      // Install and pressing either cancels the button and routes the press to the
+      // centre key instead, which is the commit. A shortcut must never be able to
+      // send a transaction on behalf of a button the user was actually aiming at.
+      const t = ev.target as HTMLElement | null;
+      if (t && t !== document.body) return;
+      if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
       ev.preventDefault();
       const flap = live.current.onFlap;
       if (flap && (act === "scrollUp" || act === "scrollDown" || act === "profile" || act === "draw")) {
@@ -728,7 +736,13 @@ export function Device3D(props: Device3DProps) {
       };
       chart.update(data, elapsed);
 
-      for (const id of ["authorise", "draw", "board", "cancel", "new", "swap", "mode"] as DeviceId[]) {
+      // Every live key, and only live keys. This list had drifted: "board" and "new"
+      // are gone from the union and the `as DeviceId[]` cast was hiding it, while
+      // "asset" and "profile" were missing — so those two never had `enabled`/`active`
+      // re-asserted and rendered correctly only because an unset key falls through to
+      // "live". State that is never re-asserted is exactly the trap this file keeps
+      // hitting, so the list is now derived from the union rather than retyped.
+      for (const id of DEVICE_IDS) {
         device.setEnabled(id, p.enabled?.[id] !== false);
         device.setActive(id, p.active?.[id] === true);
       }

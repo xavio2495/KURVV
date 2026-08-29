@@ -19,8 +19,18 @@ import { shade, type Skin } from "../skins";
  * because the body has side walls at all.
  */
 
-export type DeviceId =
-  | "authorise" | "draw" | "asset" | "cancel" | "profile" | "swap" | "mode";
+/**
+ * Every control on the device, as a value so callers can iterate it.
+ *
+ * The union used to be written out by hand and a second hand-written list of the
+ * same names drifted out of step with it. One array, and the type derived from it,
+ * makes that impossible.
+ */
+export const DEVICE_IDS = [
+  "authorise", "draw", "asset", "cancel", "profile", "swap", "mode",
+] as const;
+
+export type DeviceId = (typeof DEVICE_IDS)[number];
 
 const BODY = { w: 14.4, h: 8.4, corner: 0.6, depth: 0.62, bevel: 0.08 };
 const BACK = { depth: 1.0 };

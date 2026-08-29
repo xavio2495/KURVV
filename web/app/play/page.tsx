@@ -113,7 +113,14 @@ export default function Play() {
 
         let s = await densePriceSeries(venue.key, since);
         if (!fresh(s)) s = await rollPriceSeries(venue, since);
-        if (!fresh(s)) s = await rollPriceSeries(venueOf(`fast-${venue.asset === "ETH" ? "eth" : "btc"}`), since);
+        // Last resort: the same asset's fastest venue. NEVER another asset's — the
+        // panel labels the chart from `venue.asset`, so borrowing BTC fills for a
+        // SOMI selection draws BTC under a "SOMI/USD" heading. SOMI has a registered
+        // series that has never rolled a market, so this is not hypothetical: it is
+        // exactly the selection that falls through to here.
+        if (!fresh(s) && venue.asset !== "SOMI") {
+          s = await rollPriceSeries(venueOf(`fast-${venue.asset === "ETH" ? "eth" : "btc"}`), since);
+        }
         if (!stop && fresh(s)) priceRef.current = s.map((p) => ({ t: p.t, price: p.price }));
       } catch { /* leave the last good series on screen */ }
     };
@@ -126,13 +133,18 @@ export default function Play() {
      * between. `_gt` on the last timestamp means the incremental query is tiny.
      */
     const head = async () => {
-      const cur = priceRef.current;
-      const lastT = cur.length ? cur[cur.length - 1].t : 0;
+      const lastT = priceRef.current.length ? priceRef.current[priceRef.current.length - 1].t : 0;
       if (!lastT) return;
       try {
         const add = await densePriceSeries(venue.key, lastT);
         if (stop || !add.length) return;
-        const fresh = add.filter((p) => p.t > lastT);
+        // Re-read the base AFTER the await. A slow full refresh can land inside this
+        // 1.5s window and switch the series to a different source; appending onto a
+        // base captured beforehand would silently revert that switch and then keep
+        // extending the reverted array on every subsequent tick.
+        const cur = priceRef.current;
+        const from = cur.length ? cur[cur.length - 1].t : 0;
+        const fresh = add.filter((p) => p.t > from);
         if (fresh.length) priceRef.current = [...cur, ...fresh].slice(-4000);
       } catch { /* the next tick tries again */ }
     };
@@ -219,14 +231,15 @@ export default function Play() {
   }, [flappy.cells]);
 
   const onStrokeEnd = useCallback(() => rebuild(mode, legCount, total), [rebuild, mode, legCount, total]);
-  useEffect(() => { rebuild(mode, legCount, total); }, [mode, legCount, total, rebuild]);
-  // A run mutates its cells in place, so the preview is rebuilt when it ends.
-  useEffect(() => {
-    if (mode === "flappy" && !flappy.running) rebuild(mode, legCount, total);
-  }, [mode, flappy.running, legCount, total, rebuild]);
 
   // The grid is one cell per Window, so changing the Leg count reshapes it. Painted
   // columns beyond the new width are dropped rather than silently committed.
+  //
+  // THIS MUST RESHAPE BEFORE THE PREVIEW IS REBUILT. Effects run in declaration
+  // order, so with the rebuild first a Leg-count change previewed the OLD, longer
+  // grid while `commit` read the live ref — the strip showed eight Legs and the
+  // transaction sent four. Worse, trimming a ref schedules no render, so nothing ever
+  // re-ran the rebuild to correct it.
   useEffect(() => {
     const cur = cellsRef.current;
     const next = emptyCells(legCount);
@@ -234,19 +247,26 @@ export default function Play() {
     cellsRef.current = next;
   }, [legCount]);
 
+  useEffect(() => { rebuild(mode, legCount, total); }, [mode, legCount, total, rebuild]);
+  // A run mutates its cells in place, so the preview is rebuilt when it ends.
+  useEffect(() => {
+    if (mode === "flappy" && !flappy.running) rebuild(mode, legCount, total);
+  }, [mode, flappy.running, legCount, total, rebuild]);
+
   /** The centre key commits whichever gesture is live. */
   const commit = useCallback(() => {
-    if (mode === "flappy") {
-      const built = cellsToPlan(flappy.cells, { totalStake: total, minWeightShare: 0.05 });
-      void plan.commitLegs(built.legs, venue, total, flappy.cells.map((c) => c ?? null));
-      return;
-    }
-    if (mode === "pixel") {
-      const built = cellsToPlan(cellsRef.current, { totalStake: total, minWeightShare: 0.05 });
-      void plan.commitLegs(built.legs, venue, total, cellsRef.current.map((c) => c ?? null));
-      return;
-    }
-    void plan.commit(activeCurve(), toCurvePoints, venue, legCount, total);
+    // `cellsToPlan` THROWS on an empty grid, and this runs inside a pointer handler —
+    // outside `usePlan`'s try/catch, so an unguarded throw surfaces nowhere and shows
+    // the user nothing at all.
+    try {
+      if (mode === "flappy" || mode === "pixel") {
+        const cells = mode === "flappy" ? flappy.cells : cellsRef.current;
+        const built = cellsToPlan(cells, { totalStake: total, minWeightShare: 0.05 });
+        void plan.commitLegs(built.legs, venue, total, cells.map((c) => c ?? null));
+        return;
+      }
+      void plan.commit(activeCurve(), toCurvePoints, venue, legCount, total);
+    } catch (e) { setDrawErr((e as Error).message); }
   }, [plan, venue, legCount, total, mode, flappy.cells]);
 
   const onNew = useCallback(() => {

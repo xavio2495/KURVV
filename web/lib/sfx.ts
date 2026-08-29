@@ -206,8 +206,8 @@ const KEY_CLIP: Record<string, [ClipKey, ClipKey]> = {
   authorise: ["keyPress", "keyRelease"],
   draw:      ["padPress", "padRelease"],
   cancel:    ["padPress", "padRelease"],
-  board:     ["padPress", "padRelease"],
-  new:       ["padPress", "padRelease"],
+  asset:     ["padPress", "padRelease"],
+  profile:   ["padPress", "padRelease"],
   swap:      ["actPress", "actRelease"],
   mode:      ["actPress", "actRelease"],
 };
@@ -230,11 +230,11 @@ export const sfx = {
 
   press(id: string) {
     if (!gate(`p:${id}`)) return;
-    play((KEY_CLIP[id] ?? KEY_CLIP.new)[0]);
+    play((KEY_CLIP[id] ?? KEY_CLIP.cancel)[0]);
   },
   release(id: string) {
     if (!gate(`r:${id}`)) return;
-    play((KEY_CLIP[id] ?? KEY_CLIP.new)[1]);
+    play((KEY_CLIP[id] ?? KEY_CLIP.cancel)[1]);
   },
 
   /**

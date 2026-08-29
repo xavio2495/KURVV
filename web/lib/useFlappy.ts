@@ -58,13 +58,25 @@ export function useFlappy(venue: Venue, active: boolean, legCount: number): Flap
   useEffect(() => {
     if (!active) return;
     let stop = false;
+    // Drop the previous venue's Windows BEFORE the new ones arrive. Keeping them for
+    // the round trip means `hasReference` stays true across the change, so switching
+    // to a venue that publishes no strike draws a confident at-the-money staircase
+    // for it — the one claim this mode must never make.
+    setRefs([]);
     void refSeries(venue, legCount + 2)
       .then((r) => { if (!stop) setRefs(r); })
       .catch(() => { if (!stop) setRefs([]); });
     return () => { stop = true; };
   }, [active, venue, legCount]);
 
-  useEffect(() => { cellsRef.current = new Array(legCount).fill(undefined); }, [legCount, venue]);
+  // Reshaping the input has to retire the run that was writing to it. Otherwise the
+  // taps vanish while the carriage keeps sweeping, and `run.legCount` outlives the
+  // array it indexes — which would let `tap` write past the end and author a Plan
+  // with more Legs than the device is set to.
+  useEffect(() => {
+    cellsRef.current = new Array(legCount).fill(undefined);
+    runRef.current = null;
+  }, [legCount, venue]);
 
   // A run is wall-clock driven, so the component has to tick while one is live.
   useEffect(() => {
