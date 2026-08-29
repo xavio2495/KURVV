@@ -326,6 +326,8 @@ export function createChart(): Chart {
       }
       price.set(pts);
     }
+    const flying = !!d.gates;
+    price.meshes.forEach((m) => { m.visible = !flying && d.buckets.length > 1; });
 
     // Legs, on the timeline.
     let ln = 0;
@@ -367,7 +369,7 @@ export function createChart(): Chart {
     // The cursor sits on the last observation, and the level line runs from it to
     // the far edge of the drawable span.
     const head = d.buckets.at(-1);
-    cap.visible = level.visible = head !== undefined;
+    cap.visible = level.visible = head !== undefined && !d.gates;
     if (head) {
       const hx = timeToX(head.t + d.interval / 2, now, horizonSec);
       const hy = priceToY(head.close, extent.lo, extent.hi);
@@ -389,17 +391,11 @@ export function createChart(): Chart {
     // A replay is history, so it needs the full width; a live run still reads
     // correctly because its gates simply sit in the right-hand portion.
     gates.update(d.gates ? { ...d.gates, rect: { x0: -WORLD.spanX, x1: WORLD.spanX } } : null, elapsed);
-    if (d.gates) {
-      curve.meshes.forEach((m) => { m.visible = false; });
-      for (const l of ghosts) l.visible = false;
-    }
 
     // ── the grid, when pixel mode is on ────────────────────────────────────
     const cells = d.cells;
     const cols = Math.max(1, d.legCount);
     lattice.visible = !!cells;
-    curve.meshes.forEach((m) => { m.visible = !cells && m.visible; });
-    if (cells) for (const l of ghosts) l.visible = false;
     if (cells) {
       buildLattice(x0, x1, cols);
       const cw = (x1 - x0) / cols;
@@ -459,6 +455,16 @@ export function createChart(): Chart {
       curve.set(active ? toWorld(active, 0.02) : []);
     }
 
+    /**
+     * Who owns the frame, decided every frame.
+     *
+     * Not switched off when a mode starts: the streak's own visibility is only
+     * touched when its change key moves, so a mode that hid it left it hidden until
+     * the user drew again.
+     */
+    const drawnVisible = !d.cells && !d.gates && !!active;
+    curve.meshes.forEach((m) => { m.visible = drawnVisible; });
+
     // The ghosts only change when a Curve is finished, never mid-stroke.
     const gk = all.slice(0, -1).map((c) => c.length).join(",");
     if (gk !== ghostKey) {
@@ -467,11 +473,11 @@ export function createChart(): Chart {
       ghosts.forEach((l, i) => {
         const c = older[i];
         l.geometry.dispose();
-        if (!c) { l.visible = false; l.geometry = new THREE.BufferGeometry(); return; }
-        l.geometry = new THREE.BufferGeometry().setFromPoints(toWorld(c, 0.018));
-        l.visible = true;
+        l.userData.live = !!c;
+        l.geometry = c ? new THREE.BufferGeometry().setFromPoints(toWorld(c, 0.018)) : new THREE.BufferGeometry();
       });
     }
+    for (const l of ghosts) l.visible = drawnVisible && !!l.userData.live;
 
     nowPlane.position.set(x0, WORLD.spanY / 2, -WORLD.laneGap * 0.8);
     nowPlane.scale.set(0.03, WORLD.spanY, 1);

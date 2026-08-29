@@ -36,6 +36,11 @@ export interface Flappy {
   cells: PixelCells;
   /** This venue publishes no reference level, so gates cannot be anchored honestly. */
   unsupported: boolean;
+  /**
+   * How the run did. `resolved` excludes Windows that voided or have not settled, so
+   * the fraction never flatters itself by counting a no-contest as a miss.
+   */
+  score: { hit: number; resolved: number; placed: number };
   start: () => void;
   tap: (up: boolean) => void;
 }
@@ -118,11 +123,19 @@ export function useFlappy(venue: Venue, active: boolean, legCount: number): Flap
 
     const path = birdPath(refs).map((p, i, arr) => ({ u: i / Math.max(arr.length - 1, 1), v: v(p.price) }));
     const run = runRef.current;
-    view = { gates, bird: path, head: run ? runProgress(run, Date.now()) : 1 };
+    const live = !!run && columnAt(run, Date.now()) >= 0;
+    view = { gates, bird: path, head: run ? runProgress(run, Date.now()) : 1, running: live };
   }
+
+  const verdicts = window_.length ? gradeRun(cellsRef.current, window_) : [];
+  const score = {
+    hit: verdicts.filter((v) => v === "won").length,
+    resolved: verdicts.filter((v) => v === "won" || v === "lost").length,
+    placed: verdicts.filter((v) => v !== "skipped").length,
+  };
 
   const active_ = runRef.current;
   const running = !!active_ && columnAt(active_, Date.now()) >= 0;
 
-  return { view, refs: window_, running, cells: cellsRef.current, unsupported, start, tap };
+  return { view, refs: window_, running, cells: cellsRef.current, unsupported, score, start, tap };
 }

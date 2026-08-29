@@ -19,6 +19,14 @@ export interface ChartUi {
   layout: (fovDeg: number, aspect: number) => void;
   /** Paint the current state. Cheap; gated on a change key by the caller. */
   setFlat: (flat: boolean) => void;
+  /**
+   * A line across the bottom of the display, or null to hide it.
+   *
+   * The mode key changed what the device does but not what the big screen looked
+   * like, so pressing it read as doing nothing. This is where the screen says which
+   * game it is and what to press next.
+   */
+  setBanner: (text: string | null) => void;
   /** Hit test a screen UV. Returns the control id under it, or null. */
   pick: (uv: THREE.Vector2, camera: THREE.Camera) => string | null;
   dispose: () => void;
@@ -83,6 +91,47 @@ export function createChartUi(): ChartUi {
   };
   paint(false);
 
+  // ── the banner ───────────────────────────────────────────────────────────
+  const bCanvas = document.createElement("canvas");
+  bCanvas.width = 900;
+  bCanvas.height = 90;
+  const bg = bCanvas.getContext("2d")!;
+  const bTex = new THREE.CanvasTexture(bCanvas);
+  bTex.colorSpace = THREE.SRGBColorSpace;
+  const banner = new THREE.Mesh(
+    new THREE.PlaneGeometry(1.0, 0.1),
+    new THREE.MeshBasicMaterial({ map: bTex, transparent: true, depthTest: false, toneMapped: false }),
+  );
+  banner.renderOrder = 998;
+  banner.visible = false;
+  group.add(banner);
+
+  let bannerText: string | null = null;
+  const setBanner = (text: string | null) => {
+    if (text === bannerText) return;
+    bannerText = text;
+    banner.visible = !!text;
+    if (!text) return;
+    const w = bCanvas.width;
+    const h = bCanvas.height;
+    bg.clearRect(0, 0, w, h);
+    bg.font = "800 40px ui-sans-serif, system-ui, sans-serif";
+    const tw = bg.measureText(text).width;
+    const pillW = Math.min(w - 8, tw + 72);
+    bg.fillStyle = "rgba(14,12,24,.86)";
+    bg.strokeStyle = "rgba(107,255,224,.45)";
+    bg.lineWidth = 3;
+    bg.beginPath();
+    bg.roundRect((w - pillW) / 2, 6, pillW, h - 12, (h - 12) / 2);
+    bg.fill();
+    bg.stroke();
+    bg.fillStyle = "#6bffe0";
+    bg.textAlign = "center";
+    bg.textBaseline = "middle";
+    bg.fillText(text, w / 2, h / 2 + 2);
+    bTex.needsUpdate = true;
+  };
+
   const ray = new THREE.Raycaster();
   const ndc = new THREE.Vector2();
 
@@ -92,8 +141,12 @@ export function createChartUi(): ChartUi {
       const halfH = Math.tan((fovDeg * Math.PI) / 360) * Math.abs(Z);
       const halfW = halfH * aspect;
       mesh.position.set(-halfW + PAD + W / 2, halfH - PAD - H / 2, Z);
+      // Top-centre, clear of the view toggle on the left and of the Plan strip,
+      // which sits along the bottom of the same display.
+      banner.position.set(0, halfH - PAD - H / 2, Z);
     },
     setFlat: paint,
+    setBanner,
     pick: (uv, camera) => {
       ndc.set(uv.x * 2 - 1, uv.y * 2 - 1);
       ray.setFromCamera(ndc, camera);
@@ -104,6 +157,9 @@ export function createChartUi(): ChartUi {
       mesh.geometry.dispose();
       (mesh.material as THREE.Material).dispose();
       tex.dispose();
+      banner.geometry.dispose();
+      (banner.material as THREE.Material).dispose();
+      bTex.dispose();
     },
   };
 }

@@ -42,6 +42,8 @@ export interface GatesData {
   bird: { u: number; v: number }[];
   /** How far along the flight the bird currently is, 0..1. */
   head: number;
+  /** True while a run is sweeping. Idle draws the board, not the flight. */
+  running: boolean;
   /** World-space rect the normalised coordinates map into. */
   rect: { x0: number; x1: number };
 }
@@ -99,10 +101,32 @@ export function createGates(): Gates {
    * One short rung per Window at its own level. This is the at-the-money reset — the
    * thing that actually defines the product — and nothing else in the app draws it.
    */
-  const rungMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 });
+  const rungMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9 });
   const rungs = new THREE.LineSegments(new THREE.BufferGeometry(), rungMat);
   rungs.frustumCulled = false;
   group.add(rungs);
+
+  /**
+   * An empty slot per unplayed column.
+   *
+   * Without them an idle board is a few thin lines over a chart, and the mode looks
+   * like it never changed. The slots say "there are six of these and none is filled
+   * yet" before the player has done anything.
+   */
+  const slotMat = new THREE.LineBasicMaterial({ color: 0x6bffe0, transparent: true, opacity: 0.3 });
+  const slots = new THREE.LineSegments(new THREE.BufferGeometry(), slotMat);
+  slots.frustumCulled = false;
+  group.add(slots);
+
+  /** The carriage: which column the next tap lands in. */
+  const carriageMat = new THREE.MeshBasicMaterial({
+    color: 0xfff1da, transparent: true, opacity: 0.16, side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
+  });
+  const carriage = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), carriageMat);
+  carriage.frustumCulled = false;
+  carriage.visible = false;
+  group.add(carriage);
 
   // ── the bird ─────────────────────────────────────────────────────────────
   const birdMat = new THREE.MeshStandardMaterial({
@@ -139,10 +163,20 @@ export function createGates(): Gates {
 
     let n = 0;
     const rungPts: number[] = [];
+    const slotPts: number[] = [];
     for (const g of d.gates) {
       if (n >= MAX_GATES) break;
       const yRef = Y(g.vRef);
       rungPts.push(X(g.u0), yRef, 0.03, X(g.u1), yRef, 0.03);
+      // The column's own boundary, so the board reads as a row of slots.
+      rungPts.push(X(g.u1), 0, 0.03, X(g.u1), WORLD.spanY, 0.03);
+      if (!g.dir) {
+        const a = X(g.u0) + (X(g.u1) - X(g.u0)) * 0.12;
+        const b = X(g.u1) - (X(g.u1) - X(g.u0)) * 0.12;
+        const top = WORLD.spanY * 0.94;
+        const bot = WORLD.spanY * 0.06;
+        slotPts.push(a, top, 0.02, b, top, 0.02, a, bot, 0.02, b, bot, 0.02);
+      }
 
       if (!g.dir) continue; // a skipped Window is its rung and nothing else
 
@@ -175,20 +209,37 @@ export function createGates(): Gates {
     if (plates.instanceColor) plates.instanceColor.needsUpdate = true;
     if (faces.instanceColor) faces.instanceColor.needsUpdate = true;
 
-    const rk = `${d.gates.length}:${x0.toFixed(2)}:${d.gates.map((g) => g.vRef.toFixed(3)).join(",")}`;
+    const rk = `${d.gates.length}:${x0.toFixed(2)}:${d.gates.map((g) => `${g.vRef.toFixed(3)}${g.dir ?? "-"}`).join(",")}`;
     if (rk !== rungKey) {
       rungKey = rk;
       rungs.geometry.dispose();
       const g2 = new THREE.BufferGeometry();
       g2.setAttribute("position", new THREE.Float32BufferAttribute(rungPts, 3));
       rungs.geometry = g2;
+      slots.geometry.dispose();
+      const g3 = new THREE.BufferGeometry();
+      g3.setAttribute("position", new THREE.Float32BufferAttribute(slotPts, 3));
+      slots.geometry = g3;
+    }
+
+    // The carriage sits over the column the next tap lands in.
+    const n_ = d.gates.length;
+    carriage.visible = d.running && n_ > 0;
+    if (carriage.visible) {
+      const col = Math.min(n_ - 1, Math.floor(d.head * n_));
+      const g = d.gates[col];
+      carriage.scale.set((g.u1 - g.u0) * span, WORLD.spanY, 1);
+      carriage.position.set(X((g.u0 + g.u1) / 2), WORLD.spanY / 2, 0.01);
+      carriageMat.opacity = 0.12 + 0.08 * Math.sin(elapsed * 8);
     }
 
     // ── the flight ─────────────────────────────────────────────────────────
     const path = d.bird;
-    bird.visible = trail.visible = halo.visible = path.length > 1;
+    bird.visible = halo.visible = path.length > 1 && d.running;
+    trail.visible = path.length > 1;
+    trailMat.opacity = d.running ? 0.85 : 0.3;
     if (path.length > 1) {
-      const flown = Math.max(1, Math.floor(d.head * (path.length - 1)));
+      const flown = d.running ? Math.max(1, Math.floor(d.head * (path.length - 1))) : path.length - 1;
       const pts: THREE.Vector3[] = [];
       for (let i = 0; i <= flown; i++) pts.push(new THREE.Vector3(X(path[i].u), Y(path[i].v), 0.05));
       trail.geometry.dispose();
@@ -212,6 +263,10 @@ export function createGates(): Gates {
       faceMat.dispose();
       rungs.geometry.dispose();
       rungMat.dispose();
+      slots.geometry.dispose();
+      slotMat.dispose();
+      carriage.geometry.dispose();
+      carriageMat.dispose();
       bird.geometry.dispose();
       birdMat.dispose();
       halo.geometry.dispose();
