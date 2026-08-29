@@ -9,6 +9,7 @@ import { GB_H, GB_W, drawGb, type MenuRow } from "../lib/gb";
 import { sfx } from "../lib/sfx";
 import { createChartUi } from "../lib/three/chartUi";
 import { cellAt, type PixelCells } from "../lib/pixel";
+import type { GatesData } from "../lib/three/gates";
 
 /** Curves kept on the chart at once. Beyond this the oldest is dropped. */
 const MAX_CURVES = 6;
@@ -30,6 +31,8 @@ export interface Device3DProps {
   curveRef?: React.RefObject<DrawPoint[][]>;
   /** Pixel mode's painted grid. Written in place, like the Curve. */
   cellsRef?: React.RefObject<PixelCells>;
+  /** Flappy mode's gates and flight, already normalised. */
+  gates?: Omit<GatesData, "rect"> | null;
   planStartRef?: React.RefObject<number | null>;
   planId?: number | null;
   horizonSec?: number;
@@ -46,6 +49,11 @@ export interface Device3DProps {
   editing?: boolean;
   connected?: boolean;
   onKey?: (id: DeviceId) => void;
+  /**
+   * Set only while a flappy run is sweeping. It takes over the top and bottom keys,
+   * so the run has an input without any control changing what it means elsewhere.
+   */
+  onFlap?: ((up: boolean) => void) | null;
   onScroll?: (step: number) => void;
   enabled?: Partial<Record<DeviceId, boolean>>;
   active?: Partial<Record<DeviceId, boolean>>;
@@ -471,6 +479,7 @@ export function Device3D(props: Device3DProps) {
         while (Math.abs(rolling.acc) >= DETENT) {
           const step = rolling.acc > 0 ? -1 : 1;
           rolling.acc += step * DETENT;
+          if (live.current.onFlap) { live.current.onFlap(step < 0); continue; }
           sfx.detent(live.current.rollerStep ?? 0, live.current.rollerSpan ?? 8);
           live.current.onScroll?.(step);
         }
@@ -497,7 +506,11 @@ export function Device3D(props: Device3DProps) {
         live.current.onStrokeEnd?.();
       }
       if (held) {
-        if (idOf(hit(e)) === held) { sfx.release(held); live.current.onKey?.(held); }
+        if (idOf(hit(e)) === held) {
+          sfx.release(held);
+          if (live.current.onFlap && (held === "profile" || held === "draw")) live.current.onFlap(held === "profile");
+          else live.current.onKey?.(held);
+        }
         device.setPressed(null);
         held = null;
       }
@@ -523,6 +536,16 @@ export function Device3D(props: Device3DProps) {
       const act = KEYS[ev.key];
       if (!act) return;
       ev.preventDefault();
+      const flap = live.current.onFlap;
+      if (flap && (act === "scrollUp" || act === "scrollDown" || act === "profile" || act === "draw")) {
+        const up = act === "scrollUp" || act === "profile";
+        const key: DeviceId = up ? "profile" : "draw";
+        device.setPressed(key);
+        sfx.press(key);
+        window.setTimeout(() => { device.setPressed(null); sfx.release(key); }, 110);
+        flap(up);
+        return;
+      }
       if (act === "scrollUp" || act === "scrollDown") {
         sfx.detent(live.current.rollerStep ?? 0, live.current.rollerSpan ?? 8);
         live.current.onScroll?.(act === "scrollUp" ? -1 : 1);
@@ -631,6 +654,7 @@ export function Device3D(props: Device3DProps) {
           extent,
           asset: p.asset,
           playing: channel === "chart",
+          running: !!p.onFlap,
           balance: p.balance ?? null,
           stake: p.stake,
           venueLive: p.venueLive ?? null,
@@ -650,6 +674,7 @@ export function Device3D(props: Device3DProps) {
         tint: p.skin.lanes[0],
         legs, curves: p.curveRef?.current?.length ? p.curveRef.current : null,
         cells: p.mode === "pixel" ? (p.cellsRef?.current ?? null) : null,
+        gates: p.mode === "flappy" ? (p.gates ?? null) : null,
         legCount: p.legCount ?? 6,
         planStart: p.planStartRef?.current ?? null,
       };

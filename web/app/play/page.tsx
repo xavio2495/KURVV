@@ -9,6 +9,7 @@ import { cellsToPlan, emptyCells, hasPositions, type PixelCells } from "../../li
 import { densePriceSeries } from "../../lib/priceSeries";
 import { rollPriceSeries, venueIsLive } from "../../lib/commit";
 import { usePlan } from "../../lib/usePlan";
+import { useFlappy } from "../../lib/useFlappy";
 import { useFires } from "../../lib/useFires";
 import { useWindowClock } from "../../lib/useWindowClock";
 import { PLAN_BOOK } from "../../lib/commit";
@@ -55,6 +56,15 @@ export default function Play() {
   const [mode, setMode] = useState<Mode>("draw");
 
   const plan = usePlan(venue);
+
+  /**
+   * Flappy runs against real, finished Windows.
+   *
+   * A rehearsal, not a position: the Windows it grades against have already settled,
+   * so the verdicts are real but nothing is staked. It is the fastest honest way to
+   * show the at-the-money staircase and the hit rule.
+   */
+  const flappy = useFlappy(venue, mode === "flappy", legCount);
 
   /**
    * The Reactivity fire feed — the evidence that nobody signed the Legs.
@@ -190,7 +200,12 @@ export default function Play() {
     try {
       // Flappy is declared on the play key but not built; it must not silently
       // produce a Plan from whatever the previous mode left behind.
-      if (m === "flappy") { setPreview(null); return; }
+      if (m === "flappy") {
+        // A finished run authors a Plan through the SAME builder the grid uses.
+        if (!hasPositions(flappy.cells)) { setPreview(null); return; }
+        setPreview(cellsToPlan(flappy.cells, { totalStake: tot, minWeightShare: 0.05 }).legs);
+        return;
+      }
       if (m === "pixel") {
         if (!hasPositions(cellsRef.current)) { setPreview(null); return; }
         setPreview(cellsToPlan(cellsRef.current, { totalStake: tot, minWeightShare: 0.05 }).legs);
@@ -200,10 +215,15 @@ export default function Play() {
       if (c.length < 2) { setPreview(null); return; }
       setPreview(curveToPlan(toCurvePoints(c), { legCount: lc, totalStake: tot, minWeightShare: 0.05 }));
     } catch (e) { setPreview(null); setDrawErr((e as Error).message); }
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flappy.cells]);
 
   const onStrokeEnd = useCallback(() => rebuild(mode, legCount, total), [rebuild, mode, legCount, total]);
   useEffect(() => { rebuild(mode, legCount, total); }, [mode, legCount, total, rebuild]);
+  // A run mutates its cells in place, so the preview is rebuilt when it ends.
+  useEffect(() => {
+    if (mode === "flappy" && !flappy.running) rebuild(mode, legCount, total);
+  }, [mode, flappy.running, legCount, total, rebuild]);
 
   // The grid is one cell per Window, so changing the Leg count reshapes it. Painted
   // columns beyond the new width are dropped rather than silently committed.
@@ -216,14 +236,18 @@ export default function Play() {
 
   /** The centre key commits whichever gesture is live. */
   const commit = useCallback(() => {
-    if (mode === "flappy") return;
+    if (mode === "flappy") {
+      const built = cellsToPlan(flappy.cells, { totalStake: total, minWeightShare: 0.05 });
+      void plan.commitLegs(built.legs, venue, total, flappy.cells.map((c) => c ?? null));
+      return;
+    }
     if (mode === "pixel") {
       const built = cellsToPlan(cellsRef.current, { totalStake: total, minWeightShare: 0.05 });
       void plan.commitLegs(built.legs, venue, total, cellsRef.current.map((c) => c ?? null));
       return;
     }
     void plan.commit(activeCurve(), toCurvePoints, venue, legCount, total);
-  }, [plan, venue, legCount, total, mode]);
+  }, [plan, venue, legCount, total, mode, flappy.cells]);
 
   const onNew = useCallback(() => {
     plan.reset();
@@ -260,6 +284,9 @@ export default function Play() {
   }, []);
 
   const status = plan.busy ?? plan.err ?? drawErr
+    ?? (mode === "flappy" && flappy.unsupported
+      ? `The ${venue.label.toLowerCase()} window publishes no reference level, so gates cannot be anchored. Switch to 60s or 5m.`
+      : null)
     ?? (venueLive === false
       ? `No ${venue.asset} market is open on the ${venue.label.toLowerCase()} window right now.`
       : null);
@@ -280,6 +307,8 @@ export default function Play() {
         horizonSec={horizon} onStrokeEnd={onStrokeEnd}
         onLegs={setLegCount} onVenue={setVenueKey} onStake={setStakeIndex}
         plan={preview ?? undefined} venueLive={venueLive}
+        gates={flappy.view} onStartRun={flappy.start}
+        onFlap={flappy.running ? flappy.tap : null}
         chain={{
           address: plan.address, bal: plan.bal, delegated: plan.delegated, dryRun: plan.dryRun,
           connected: !!plan.address, hasPlan: plan.planId !== null,

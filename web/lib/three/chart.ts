@@ -4,6 +4,7 @@ import { WORLD, priceToY, timeToX, visibleSpanOf } from "./stage";
 import type { Bucket } from "./buckets";
 import type { LegView } from "../render/types";
 import { PIXEL_HEIGHT, PIXEL_ROWS, type PixelCells } from "../pixel";
+import { createGates, type GatesData } from "./gates";
 
 /**
  * ONE price timeline, drawn as a streak.
@@ -53,6 +54,12 @@ export interface ChartData {
   curves: DrawPoint[][] | null;
   /** Pixel mode's painted grid, or null in draw mode. */
   cells: PixelCells | null;
+  /**
+   * Flappy mode's gates and bird, already normalised. `null` in every other mode.
+   * The caller owns the mapping so this scene never has to know whether it is
+   * showing a live run or a replay of finished Windows.
+   */
+  gates: Omit<GatesData, "rect"> | null;
   legCount: number;
   planStart: number | null;
   /** Line colour, taken from the active skin so the chart matches its device. */
@@ -281,6 +288,10 @@ export function createChart(): Chart {
   legMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_LEGS * 3), 3);
   group.add(legMesh);
 
+  // ── flappy: the gates and the bird ───────────────────────────────────────
+  const gates = createGates();
+  group.add(gates.group);
+
   // ── the `now` plane ──────────────────────────────────────────────────────
   const nowMat = new THREE.MeshBasicMaterial({ color: STATE.gold, transparent: true, opacity: 0.16, side: THREE.DoubleSide });
   const nowPlane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), nowMat);
@@ -372,6 +383,15 @@ export function createChart(): Chart {
       pos.needsUpdate = true;
       levelGeo.computeBoundingSphere();
       level.computeLineDistances();
+    }
+
+    // ── flappy: gates over the whole visible span, not just the future ─────
+    // A replay is history, so it needs the full width; a live run still reads
+    // correctly because its gates simply sit in the right-hand portion.
+    gates.update(d.gates ? { ...d.gates, rect: { x0: -WORLD.spanX, x1: WORLD.spanX } } : null, elapsed);
+    if (d.gates) {
+      curve.meshes.forEach((m) => { m.visible = false; });
+      for (const l of ghosts) l.visible = false;
     }
 
     // ── the grid, when pixel mode is on ────────────────────────────────────
@@ -473,6 +493,7 @@ export function createChart(): Chart {
       levelMat.dispose();
       cellGeo.dispose();
       cellMat.dispose();
+      gates.dispose();
       for (const l of ghosts) l.geometry.dispose();
       ghostMat.dispose();
       lattice.geometry.dispose();
