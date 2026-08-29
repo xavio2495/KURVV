@@ -556,7 +556,17 @@ contract PlanBook is SomniaEventHandler {
         // voided market pays 0.5 per contract on each side.
         uint256 tokenId = leg.direction == Dir.Up ? yesId : noId;
         uint8 outcomeIdx = leg.direction == Dir.Up ? 0 : 1;
-        uint256 held = OUTCOME.balanceOf(address(this), tokenId);
+
+        // ONLY THIS LEG'S TICKETS. The book holds one ERC-6909 balance per outcome
+        // token, pooled across every Plan it hosts -- and Plans share markets by
+        // design: a series has one market per Window, so two owners going the same
+        // way land on the same tokenId. Redeeming the whole balance handed the FIRST
+        // caller every other Plan's winnings and left the rest redeeming zero.
+        // `leg.filled` is exactly what this Leg bought, so it is the correct claim;
+        // the balance still caps it so an accounting drift cannot revert the redeem
+        // for everyone queued behind it.
+        uint256 bal = OUTCOME.balanceOf(address(this), tokenId);
+        uint256 held = leg.filled < bal ? leg.filled : bal;
 
         uint256 beforeCol = COLLATERAL.balanceOf(address(this));
         if (held > 0) MODULE.redeem(0, venueId, leg.marketId, outcomeIdx, held);

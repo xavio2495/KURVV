@@ -175,6 +175,43 @@ describe("Plan lifecycle", () => {
     assert.equal((await book.read.getLeg([0n, 0])).state, 2, "Leg should be Settled");
   });
 
+  it("THE TRAP: two Plans on the same market each redeem only their OWN tickets", async () => {
+    // The book holds ONE ERC-6909 balance per outcome token, pooled across every Plan
+    // it hosts, and Plans share markets by design: a series has one market per Window,
+    // so two owners going the same way land on the same tokenId. Redeeming the whole
+    // balance paid the first caller both Plans' winnings and left the second nothing.
+    const { book, usdc, outcome, user, market } = await setup();
+    const [, , second] = await hre.viem.getWalletClients();
+
+    await usdc.write.approve([book.address, 1_000_000n], { account: user.account });
+    await book.write.commitPlan([commitParams(mid(1), CREATOR), [0, 0], [400_000n, 600_000n]], { account: user.account });
+
+    await usdc.write.mint([second.account.address, 1_000_000_000n]);
+    await usdc.write.approve([book.address, 1_000_000n], { account: second.account });
+    await book.write.commitPlan([commitParams(mid(1), CREATOR), [0, 0], [400_000n, 600_000n]], { account: second.account });
+
+    const mine = (await book.read.getLeg([0n, 0])).filled;
+    const theirs = (await book.read.getLeg([1n, 0])).filled;
+    assert.ok(mine > 0n && theirs > 0n, "both Legs must have filled for this to test anything");
+    assert.equal(
+      await outcome.read.balanceOf([book.address, YES]), mine + theirs,
+      "the book's balance is POOLED across both Plans — that is the whole hazard",
+    );
+
+    await market.write.resolve([10_000_000n, 0n]); // Up wins; both Legs were Up
+
+    const beforeA = await usdc.read.balanceOf([user.account.address]);
+    await book.write.redeemSettled([0n, 0]);
+    const afterA = await usdc.read.balanceOf([user.account.address]);
+    assert.equal(afterA - beforeA, mine, "the first redeemer must take ONLY its own tickets");
+
+    // The decisive half: the second Plan's winnings must still be there.
+    const beforeB = await usdc.read.balanceOf([second.account.address]);
+    await book.write.redeemSettled([1n, 0]);
+    const afterB = await usdc.read.balanceOf([second.account.address]);
+    assert.equal(afterB - beforeB, theirs, "the second owner must not be left with zero");
+  });
+
   it("a losing Leg redeems successfully and pays zero", async () => {
     const { book, usdc, user, market } = await setup();
     await usdc.write.approve([book.address, 1_000_000n], { account: user.account });
