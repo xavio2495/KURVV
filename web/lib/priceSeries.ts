@@ -1,4 +1,4 @@
-import { INDEXER, VENUES, type Venue } from "./venues";
+import { INDEXER, venueOf, type Venue } from "./venues";
 
 /**
  * A dense BTC price series, every point a real on-chain observation.
@@ -42,7 +42,9 @@ interface SpotMarket {
 }
 
 /** Spot base token for a venue's asset. Only BTC is live; WETH last traded 38h ago. */
-const SPOT_BASE: Record<string, string> = { BTC: "WBTC", ETH: "WETH" };
+// The spot book each asset is charted from. SOMI trades natively, the majors as
+// wrapped tokens; all three are quoted in USDso on the same indexer.
+const SPOT_BASE: Record<string, string> = { BTC: "WBTC", ETH: "WETH", SOMI: "SOMI" };
 
 async function gql<T>(query: string): Promise<T> {
   const r = await fetch(INDEXER, {
@@ -97,7 +99,7 @@ export async function densePriceSeries(
   venueKey: Venue["key"],
   sinceSec: number,
 ): Promise<{ t: number; price: number }[]> {
-  const spot = await spotMarket(VENUES[venueKey].asset);
+  const spot = await spotMarket(venueOf(venueKey).asset);
   if (!spot) return [];
 
   let rows: { timestamp: string; fillPrice: string }[];

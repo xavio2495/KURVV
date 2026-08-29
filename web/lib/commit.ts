@@ -44,12 +44,36 @@ export async function liveMarket(v: Venue, tries = 12): Promise<LiveMarket | nul
   return null;
 }
 
+/**
+ * Is this venue rolling right now?
+ *
+ * One query, no retry — the caller polls. `liveMarket` deliberately retries for two
+ * dozen seconds because it is on the commit path and a roll boundary is worth
+ * waiting through; this is for the UI, where the honest answer to "is there a market"
+ * has to arrive before the user presses anything.
+ *
+ * It matters because a series can stop. The 15-minute series stalled on 29 Aug with
+ * its last window unfinalised, and the chain's own token has a registered series that
+ * has never rolled at all. Both look identical from the picker unless it is asked.
+ */
+export async function venueIsLive(v: Venue): Promise<boolean> {
+  const cutoff = Math.floor(Date.now() / 1000) + v.minHeadroom + 3;
+  const d = await gql<{ Market: { marketId: string }[] }>(`{ Market(where:{
+    venueId:{_eq:"${v.venueId}"}, asset:{_eq:"${v.asset}"}, intervalSec:{_eq:"${v.intervalSec}"},
+    finalized:{_eq:false}, expiry:{_gt:"${cutoff}"}
+  }, limit:1){ marketId } }`);
+  return d.Market.length > 0;
+}
+
 /** Real on-chain settlement references: the opening price of each rolled Window. */
 export async function rollPriceSeries(v: Venue, sinceSec: number): Promise<{ t: number; price: number }[]> {
   const d = await gql<{ Market: { tradingStart: string; question: string; marketId: string }[] }>(
+    // Newest first, then reversed. Ascending with a limit takes the OLDEST 400 rows,
+    // which on a 60-second series is under seven hours starting from `since` — so a
+    // long horizon charted a window of history that ended a day ago.
     `{ Market(where:{venueId:{_eq:"${v.venueId}"}, asset:{_eq:"${v.asset}"},
         intervalSec:{_eq:"${v.intervalSec}"}, tradingStart:{_gt:"${sinceSec}"}},
-        order_by:{tradingStart:asc}, limit:400){ tradingStart question marketId } }`);
+        order_by:{tradingStart:desc}, limit:400){ tradingStart question marketId } }`);
   // The venue writes the reference into the question text; the typed strike field is
   // 0 for at-or-above markets. Parse defensively and drop anything unparseable.
   const out: { t: number; price: number }[] = [];
@@ -58,6 +82,7 @@ export async function rollPriceSeries(v: Venue, sinceSec: number): Promise<{ t: 
     const p = hit ? Number(hit[1].replace(/,/g, "")) : NaN;
     if (Number.isFinite(p) && p > 0) out.push({ t: Number(m.tradingStart), price: p });
   }
+  out.reverse();
   return out;
 }
 
@@ -79,7 +104,22 @@ export interface BuiltPlan {
 export async function buildCommit(
   points: CurvePoint[], v: Venue, legCount: number, total: bigint, book: Address = PLAN_BOOK,
 ): Promise<BuiltPlan> {
-  const legs = curveToPlan(points, { legCount, totalStake: total, minWeightShare: 0.05 });
+  return buildCommitFromLegs(
+    curveToPlan(points, { legCount, totalStake: total, minWeightShare: 0.05 }), v, total, book);
+}
+
+/**
+ * The same commit, from Legs that are already decided.
+ *
+ * Draw mode derives them from a Curve and pixel mode from painted cells, but past
+ * that point the transaction is identical — the on-chain payload is a `Direction`
+ * and a `uint96` per Leg and knows nothing about which gesture produced it. Keeping
+ * one builder is what guarantees the two modes cannot drift apart.
+ */
+export async function buildCommitFromLegs(
+  legs: Leg[], v: Venue, total: bigint, book: Address = PLAN_BOOK,
+): Promise<BuiltPlan> {
+  if (!legs.length) throw new Error("a Plan needs at least one Leg");
   const sum = legs.reduce((a, l) => a + l.stake, 0n);
   if (sum !== total) throw new Error(`stake allocation off by ${sum - total} base units`);
 
