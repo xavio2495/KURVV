@@ -290,6 +290,12 @@ export function createChart(): Chart {
 
   // ── flappy: the gates and the bird ───────────────────────────────────────
   const gates = createGates();
+  /**
+   * Reused every frame. The rect is constant — the gates always span the full visible
+   * width — so spreading `d.gates` into a fresh object plus a fresh `rect` allocated
+   * two objects per frame inside the render loop for a value that never changes.
+   */
+  const gatesScratch = { rect: { x0: -WORLD.spanX, x1: WORLD.spanX } } as GatesData;
   group.add(gates.group);
 
   // ── the `now` plane ──────────────────────────────────────────────────────
@@ -313,7 +319,10 @@ export function createChart(): Chart {
     }
 
     // The tube is swept, not per-frame cheap: only rebuild when the series moves.
-    const pk = `${d.buckets.length}:${d.buckets.at(-1)?.t ?? 0}:${extent.lo.toFixed(2)}:${horizonSec}`;
+    // `hi` belongs in the key as much as `lo` does: `priceToY` depends on both, and
+    // the head bead recomputes from the live extent every frame, so a rebuild skipped
+    // on a changed `hi` detaches the bead from the end of its own tube.
+    const pk = `${d.buckets.length}:${d.buckets.at(-1)?.t ?? 0}:${extent.lo.toFixed(2)}:${extent.hi.toFixed(2)}:${horizonSec}`;
     if (pk !== priceKey) {
       priceKey = pk;
       const pts: THREE.Vector3[] = [];
@@ -390,7 +399,7 @@ export function createChart(): Chart {
     // ── flappy: gates over the whole visible span, not just the future ─────
     // A replay is history, so it needs the full width; a live run still reads
     // correctly because its gates simply sit in the right-hand portion.
-    gates.update(d.gates ? { ...d.gates, rect: { x0: -WORLD.spanX, x1: WORLD.spanX } } : null, elapsed);
+    gates.update(d.gates ? Object.assign(gatesScratch, d.gates) : null, elapsed);
 
     // ── the grid, when pixel mode is on ────────────────────────────────────
     const cells = d.cells;

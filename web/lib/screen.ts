@@ -148,8 +148,14 @@ const ROW_ICON: Record<string, (g: CanvasRenderingContext2D, x: number, y: numbe
   skin: (g, x, y, c) => { g.strokeStyle = c; g.lineWidth = 3; g.beginPath(); g.roundRect(x - 12, y - 12, 24, 24, 5); g.stroke(); g.fillStyle = c; g.fillRect(x - 12, y, 24, 12); },
 };
 
-/** Where each row sits, so a tap on the glass can be turned back into a row index. */
-export const PANEL_ROWS = { top: 210, height: 84 };
+/**
+ * Where each row sits, so a tap on the glass can be turned back into a row index.
+ *
+ * Sized for SEVEN rows, not six. The NAME row appears once a wallet is connected, and
+ * at the old 210/84 the seventh row's selection block ran from 680 to 750 — straight
+ * under the button-hint footer, which starts at 688. Row 6 now ends at 670.
+ */
+export const PANEL_ROWS = { top: 200, height: 74 };
 export function rowAtUV(v: number, count: number): number {
   // `v` is bottom-up; the list is drawn top-down.
   const y = (1 - v) * MAIN_H;
@@ -164,12 +170,27 @@ export function rowAtUV(v: number, count: number): number {
  * see — is the specific bug a second copy of these numbers produces.
  */
 export const OPTION_H = 62;
+/** The band a dropdown may occupy. Outside it there is title bar or footer. */
+const OPTION_TOP = 96;
+const OPTION_BOTTOM = MAIN_H - 100;
+
+/**
+ * The open dropdown's box, and the row height that made it fit.
+ *
+ * The height is per-instance, not a constant: NAME offers twelve handle variants, and
+ * twelve rows at the full 62px is 760px on a 780px surface. The old version let it
+ * overflow, so the last options were drawn off-canvas AND sat at coordinates no `v`
+ * can produce — visible in neither sense, and unreachable by tap. Long lists tighten
+ * instead of overflowing, which keeps every option on the glass.
+ */
 export function optionBox(rowIndex: number, count: number) {
+  const oh = Math.max(28, Math.min(OPTION_H, Math.floor((OPTION_BOTTOM - OPTION_TOP - 16) / Math.max(count, 1))));
+  const height = count * oh + 16;
   const top = PANEL_ROWS.top + rowIndex * PANEL_ROWS.height + PANEL_ROWS.height / 2 - 22;
-  const height = count * OPTION_H + 16;
-  // Flip upward when it would run off the bottom, the way any menu does.
-  const y = top + height > MAIN_H - 100 ? Math.max(96, top - height - PANEL_ROWS.height + 24) : top;
-  return { x: 340, y, w: MAIN_W - 340 - 40, h: height };
+  // Flip upward when it would run off the bottom, then clamp into the band.
+  const wanted = top + height > OPTION_BOTTOM ? top - height - PANEL_ROWS.height + 24 : top;
+  const y = Math.max(OPTION_TOP, Math.min(wanted, OPTION_BOTTOM - height));
+  return { x: 340, y, w: MAIN_W - 340 - 40, h: height, oh };
 }
 
 /** Which option a tap landed on, or -1. */
@@ -177,7 +198,7 @@ export function optionAtUV(v: number, rowIndex: number, count: number): number {
   const y = (1 - v) * MAIN_H;
   const box = optionBox(rowIndex, count);
   if (y < box.y + 8 || y > box.y + box.h - 8) return -1;
-  const i = Math.floor((y - box.y - 8) / OPTION_H);
+  const i = Math.floor((y - box.y - 8) / box.oh);
   return i >= 0 && i < count ? i : -1;
 }
 
@@ -285,18 +306,18 @@ export function drawControlLarge(
     g.stroke();
 
     open.options.forEach((label, i) => {
-      const oy = box.y + 8 + i * OPTION_H;
+      const oy = box.y + 8 + i * box.oh;
       const on = i === open.selected;
       if (on) {
         g.fillStyle = accent;
-        g.fillRect(box.x + 8, oy + 4, box.w - 16, OPTION_H - 8);
+        g.fillRect(box.x + 8, oy + 4, box.w - 16, box.oh - 8);
       }
       g.fillStyle = on ? "#08070e" : "#e8eaed";
       g.font = `${on ? 800 : 700} 30px ui-monospace, Menlo, monospace`;
-      g.fillText(label, box.x + 28, oy + OPTION_H / 2 + 10);
+      g.fillText(label, box.x + 28, oy + box.oh / 2 + 8);
       if (on) {
         g.textAlign = "right";
-        g.fillText("\u25c2", box.x + box.w - 24, oy + OPTION_H / 2 + 10);
+        g.fillText("\u25c2", box.x + box.w - 24, oy + box.oh / 2 + 8);
         g.textAlign = "left";
       }
     });
