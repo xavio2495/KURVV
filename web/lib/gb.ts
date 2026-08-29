@@ -205,6 +205,8 @@ export interface GbState {
    * The panel then carries only what a player needs mid-gesture, not the settings.
    */
   playing?: boolean;
+  /** True while a flappy run is sweeping. */
+  running?: boolean;
   /** Wallet balance in collateral base units, shown while playing. */
   balance?: bigint | null;
   /** Total stake the Plan will commit, in base units. */
@@ -275,9 +277,14 @@ export function drawGb(g: CanvasRenderingContext2D, s: GbState) {
       text(g, "no market open", 4 * U, stripY + 3 * U, GB.lightest);
       text(g, `${s.asset ?? ""} window closed`, 4 * U, stripY + 12 * U, GB.light);
     } else if (s.planId === null) {
-      text(g, s.mode === "flappy" ? "flappy \u00b7 soon"
-        : s.mode === "pixel" ? "paint a grid" : "draw a curve", 4 * U, stripY + 3 * U, GB.lightest);
-      text(g, "scroll = stake", 4 * U, stripY + 12 * U, GB.light);
+      const line1 = s.mode === "flappy"
+        ? (s.running ? "fly \u00b7 up / down" : "press draw to run")
+        : s.mode === "pixel" ? "paint a grid" : "draw a curve";
+      // A rehearsal grades against Windows that already settled; committing applies
+      // the same pattern to the next ones. Saying so is the whole honesty of it.
+      const line2 = s.mode === "flappy" ? "rehearsal \u00b7 past windows" : "scroll = stake";
+      text(g, line1, 4 * U, stripY + 3 * U, GB.lightest);
+      text(g, line2, 4 * U, stripY + 12 * U, GB.light);
     } else {
       const done = s.legs.filter((l) => l.state === "won" || l.state === "lost").length;
       text(g, `plan #${s.planId}`, 4 * U, stripY + 3 * U, GB.lightest);
