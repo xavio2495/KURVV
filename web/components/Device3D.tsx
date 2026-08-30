@@ -2,23 +2,55 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { createDevice, DEVICE_IDS, type DeviceId } from "../lib/three/device";
-import { createChartWorld, WORLD, CHART_OFFSET_X, visibleSpanOf } from "../lib/three/stage";
-import { createChart, timelineInterval, type ChartData, type DrawPoint } from "../lib/three/chart";
-import { bucketize, priceExtent, type Bucket } from "../lib/three/buckets";
+import type { IconName } from "../lib/three/icons";
+
+import {
+  FUTURE_FRACTION, bucketize, priceExtent, timelineInterval, visibleSpanOf, type Bucket,
+} from "../lib/three/buckets";
 import { GB_H, GB_W, drawGb, type MenuRow } from "../lib/gb";
 import { sfx } from "../lib/sfx";
-import { createChartUi } from "../lib/three/chartUi";
 import { cellAt, type PixelCells } from "../lib/pixel";
-import type { GatesData } from "../lib/three/gates";
+import type { FlappyView } from "../lib/flappy";
+import { createFlappyScene } from "../lib/flappyScene";
+import { createChartScene, uvToPlot } from "../lib/chartScene";
 
 /** Curves kept on the chart at once. Beyond this the oldest is dropped. */
 const MAX_CURVES = 6;
+
+/**
+ * What each key's cap says, given what it currently does.
+ *
+ * These controls are genuinely contextual — the bottom key draws a Curve, paints a
+ * grid or dives a bird; the top key is the trader's channel until a flight is up,
+ * when it becomes the climb; the centre key selects a row on a list and commits a
+ * Plan on a chart. A fixed set of glyphs made three of those five meanings
+ * unguessable, and a legend the user has to learn is the thing a moulded cap exists
+ * to avoid.
+ */
+function glyphsFor(
+  mode: Mode,
+  screen: NonNullable<Device3DProps["screen"]>,
+  flying: boolean,
+): Partial<Record<DeviceId, IconName>> {
+  return {
+    draw: flying ? "down" : mode === "pixel" ? "grid" : mode === "flappy" ? "bird" : "pen",
+    profile: flying ? "up" : "person",
+    // The mode key is a "go to" key, so it shows the mode it goes TO. Showing the
+    // current mode would make it the only control on the device that says where you
+    // already are rather than what pressing it does.
+    mode: mode === "draw" ? "grid" : mode === "pixel" ? "bird" : "pen",
+    authorise: screen === "settings" ? "check" : "bolt",
+  };
+}
+
+/** The chart channel is the only surface a Curve or a grid may be painted on. */
+const onChart = (p: Device3DProps) => (p.screen ?? "chart") === "chart" && p.mode !== "flappy";
 import {
   MAIN_H, MAIN_W, drawAutonomy, drawBoard, drawControlLarge, optionAtUV, rowAtUV, type FireRow,
 } from "../lib/screen";
 import { createParticles } from "../lib/three/particles";
-import type { Skin } from "../lib/skins";
-import type { LegView, PricePoint } from "../lib/render/types";
+import { skinIndex, type Skin } from "../lib/skins";
+import type { DrawPoint, LegView, PricePoint } from "../lib/render/types";
 
 export type Mode = "draw" | "pixel" | "flappy";
 export type { DeviceId };
@@ -32,7 +64,9 @@ export interface Device3DProps {
   /** Pixel mode's painted grid. Written in place, like the Curve. */
   cellsRef?: React.RefObject<PixelCells>;
   /** Flappy mode's gates and flight, already normalised. */
-  gates?: Omit<GatesData, "rect"> | null;
+  gates?: FlappyView | null;
+  /** The venue publishes no reference level, so the run cannot be anchored. */
+  flappyUnsupported?: boolean;
   /** How the rehearsal did, for the strip and the panel. */
   score?: { hit: number; resolved: number; placed: number } | null;
   planStartRef?: React.RefObject<number | null>;
@@ -136,29 +170,13 @@ export function Device3D(props: Device3DProps) {
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
-    // ── the chart, drawn into a target ────────────────────────────────────
-    const RT_W = 1100;
-    const RT_H = 980;
-    const rt = new THREE.WebGLRenderTarget(RT_W, RT_H, {
-      minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
-      colorSpace: THREE.SRGBColorSpace,
-    });
-    const world = createChartWorld();
-    world.setAspect(RT_W / RT_H);
-
     /**
-     * The chart's own controls, pinned to the display's top-left corner. They live
-     * in the render target, so they are part of the picture the screen shows and are
-     * pressed by touching the glass rather than by a button floating over it.
+     * There is no render target and no chart scene any more.
+     *
+     * Every screen the device shows is a 2D canvas: chart, grid, flappy, settings,
+     * standings, autonomy. The WebGL context now draws exactly one thing — the
+     * device itself — and the display is a texture uploaded from a canvas.
      */
-    const chartUi = createChartUi();
-    chartUi.layout(world.camera.fov, RT_W / RT_H);
-    world.camera.add(chartUi.group);
-    /** Head-on, held. Distinct from the transient flatten a drawing gesture causes. */
-    let flatView = false;
-    const chart = createChart();
-    chart.group.position.x = CHART_OFFSET_X;
-    world.scene.add(chart.group);
 
     // ── the DMG buffer ────────────────────────────────────────────────────
     const gb = document.createElement("canvas");
@@ -167,106 +185,6 @@ export function Device3D(props: Device3DProps) {
     const gbCtx = gb.getContext("2d")!;
     gbCtx.imageSmoothingEnabled = false;
 
-    /**
-     * The Plan strip lives INSIDE the chart screen, parented to the chart camera so
-     * it holds the bottom of the frame however the chart is turned. It is part of the
-     * readout, not chrome around the device — and it disappears with the chart when
-     * the displays swap.
-     */
-    const hudCanvas = document.createElement("canvas");
-    hudCanvas.width = 1024;
-    hudCanvas.height = 116;
-    const hudCtx = hudCanvas.getContext("2d")!;
-    const hudTex = new THREE.CanvasTexture(hudCanvas);
-    hudTex.colorSpace = THREE.SRGBColorSpace;
-    const hud = new THREE.Mesh(
-      new THREE.PlaneGeometry(1.36, 0.154),
-      new THREE.MeshBasicMaterial({ map: hudTex, transparent: true, depthTest: false, toneMapped: false }),
-    );
-    hud.position.set(0, -0.5, -2);
-    hud.renderOrder = 999;
-    hud.visible = false;
-    world.camera.add(hud);
-    world.scene.add(world.camera);
-
-    const drawHud = (
-      legs: { direction: "UP" | "DOWN"; stake: bigint }[],
-      synthetic: number,
-      score: { hit: number; resolved: number; placed: number } | null,
-    ) => {
-      const W = hudCanvas.width;
-      const H = hudCanvas.height;
-      hudCtx.clearRect(0, 0, W, H);
-      hudCtx.fillStyle = "rgba(14,12,24,.86)";
-      hudCtx.strokeStyle = "rgba(255,255,255,.1)";
-      hudCtx.lineWidth = 2;
-      hudCtx.beginPath();
-      hudCtx.roundRect(2, 2, W - 4, H - 4, 26);
-      hudCtx.fill();
-      hudCtx.stroke();
-      hudCtx.textBaseline = "middle";
-      hudCtx.fillStyle = "#6b6486";
-      hudCtx.font = "700 26px ui-sans-serif, system-ui, sans-serif";
-      hudCtx.fillText(`PLAN · ${legs.length} LEGS`, 34, H / 2);
-
-      /**
-       * The autonomy count, on the chart itself.
-       *
-       * The full evidence lives on its own channel, but the claim has to be visible
-       * while the chart is up or the viewer never learns to look for it. This is the
-       * one number that matters: transactions that arrived with no signer.
-       */
-      let rightEdge = W - 34;
-      // The rehearsal's result, in the same slot the validator count uses — only one
-      // of the two can be true at a time, since a run is not a committed Plan.
-      if (score && score.placed) {
-        const label = `HIT ${score.hit}/${score.resolved}`;
-        hudCtx.font = "800 21px ui-monospace, Menlo, monospace";
-        const bw = hudCtx.measureText(label).width + 34;
-        const good = score.resolved > 0 && score.hit * 2 >= score.resolved;
-        hudCtx.fillStyle = good ? "rgba(107,255,196,.14)" : "rgba(255,106,122,.14)";
-        hudCtx.beginPath();
-        hudCtx.roundRect(W - 30 - bw, H / 2 - 21, bw, 42, 21);
-        hudCtx.fill();
-        hudCtx.fillStyle = good ? "#6bffc4" : "#ff6a7a";
-        hudCtx.fillText(label, W - 30 - bw + 17, H / 2 + 1);
-        rightEdge = W - 30 - bw - 20;
-      } else if (synthetic > 0) {
-        const label = `${synthetic} VALIDATOR FIRE${synthetic === 1 ? "" : "S"}`;
-        hudCtx.font = "800 21px ui-monospace, Menlo, monospace";
-        const bw = hudCtx.measureText(label).width + 34;
-        hudCtx.fillStyle = "rgba(107,255,196,.14)";
-        hudCtx.beginPath();
-        hudCtx.roundRect(W - 30 - bw, H / 2 - 21, bw, 42, 21);
-        hudCtx.fill();
-        hudCtx.fillStyle = "#6bffc4";
-        hudCtx.fillText(label, W - 30 - bw + 17, H / 2 + 1);
-        rightEdge = W - 30 - bw - 20;
-      }
-
-      // Fit the legs to the space that is left: an eight-leg Plan must not run off
-      // the end of the strip, so the type shrinks rather than the list truncating.
-      const startX = 300;
-      const avail = rightEdge - startX;
-      const labels = legs.map((l) => `${l.direction === "UP" ? "▲" : "▼"} ${(Number(l.stake) / 1e6).toFixed(2)}`);
-      let size = 30;
-      let gap = 30;
-      const widthAt = (px: number, g: number) => {
-        hudCtx.font = `700 ${px}px ui-sans-serif, system-ui, sans-serif`;
-        return labels.reduce((sum, t) => sum + hudCtx.measureText(t).width + g, -g);
-      };
-      while (size > 17 && widthAt(size, gap) > avail) { size -= 1; gap = Math.max(14, gap - 1); }
-
-      let x = startX;
-      hudCtx.font = `700 ${size}px ui-sans-serif, system-ui, sans-serif`;
-      legs.forEach((l, i) => {
-        hudCtx.fillStyle = l.direction === "UP" ? "#6bffc4" : "#ff6a7a";
-        hudCtx.fillText(labels[i], x, H / 2);
-        x += hudCtx.measureText(labels[i]).width + gap;
-      });
-      hudTex.needsUpdate = true;
-    };
-    let hudKey = "";
 
     // The settings surface, for when it takes the big screen.
     const panel = document.createElement("canvas");
@@ -275,11 +193,14 @@ export function Device3D(props: Device3DProps) {
     const panelCtx = panel.getContext("2d")!;
     const panelTex = new THREE.CanvasTexture(panel);
     panelTex.colorSpace = THREE.SRGBColorSpace;
+    /** Both game scenes draw into the same panel canvas; the screen is only ever it. */
+    const flappy = createFlappyScene();
+    const chartScene = createChartScene();
 
     // ── the device ────────────────────────────────────────────────────────
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 200);
-    const device = createDevice(live.current.skin, rt.texture, gb);
+    const device = createDevice(live.current.skin, panelTex, gb);
     const pivot = new THREE.Group();
     pivot.add(device.root);
     scene.add(pivot);
@@ -342,7 +263,9 @@ export function Device3D(props: Device3DProps) {
       if (k === seriesKey) return;
       seriesKey = k;
       interval = timelineInterval(horizon);
-      buckets = bucketize(price, interval, now - visibleSpanOf(horizon) * (1 - WORLD.futureFraction));
+      // The plot devotes its left side to history; PLOT.x0 is the split, so the visible
+      // history span is that same fraction of the window.
+      buckets = bucketize(price, interval, now - visibleSpanOf(horizon) * (1 - FUTURE_FRACTION));
       extent = priceExtent([buckets]);
     };
 
@@ -372,32 +295,16 @@ export function Device3D(props: Device3DProps) {
     };
 
     /**
-     * A hit on the glass becomes a point in the chart's drawable span.
+     * A hit on the glass becomes a point in the drawable span.
      *
-     * The screen's UV is the render target's frame, so the drawable region has to be
-     * projected through the CHART camera — not the device camera — and normalised
-     * inside that frame. This is the whole touch path; getting the camera wrong here
-     * silently puts every stroke in the wrong place.
+     * The canvas IS the screen now, so this is two divisions against a rect both the
+     * renderer and the hit test import from one place. It used to project that rect
+     * through the chart camera, and using the device camera by mistake put every
+     * stroke somewhere the user had not drawn.
      */
     const screenToCurve = (h: THREE.Intersection): DrawPoint | null => {
       if (!h.uv) return null;
-      const v3 = new THREE.Vector3();
-      const project = (x: number, y: number) => {
-        v3.set(x, y, 0);
-        chart.group.localToWorld(v3);
-        v3.project(world.camera);
-        return { x: (v3.x + 1) / 2, y: (v3.y + 1) / 2 };
-      };
-      const r = chart.drawRect();
-      const a = project(r.x0, r.y1);
-      const b = project(r.x1, r.y0);
-      const left = Math.min(a.x, b.x);
-      const right = Math.max(a.x, b.x);
-      const bottom = Math.min(a.y, b.y);
-      const top = Math.max(a.y, b.y);
-      const u = (h.uv.x - left) / Math.max(right - left, 1e-6);
-      const v = (h.uv.y - bottom) / Math.max(top - bottom, 1e-6);
-      return { u: Math.min(1, Math.max(0, u)), v: Math.min(1, Math.max(0, v)) };
+      return uvToPlot(h.uv.x, h.uv.y);
     };
 
     /**
@@ -423,16 +330,6 @@ export function Device3D(props: Device3DProps) {
       const h = hit(e);
       const id = idOf(h);
       canvas.setPointerCapture(e.pointerId);
-      // The in-screen controls get first refusal on a tap, ahead of drawing and
-      // ahead of the orbit drag — otherwise the button is unreachable while armed.
-      if (id === "screen" && h?.uv && live.current.screen === "chart") {
-        if (chartUi.pick(h.uv, world.camera) === "view") {
-          flatView = !flatView;
-          chartUi.setFlat(flatView);
-          sfx.mode(flatView);
-          return;
-        }
-      }
       if (id === "screen" && h?.uv && live.current.onFlap) {
         // Upper half is up, lower half is down. The one gesture a phone can make.
         const up = h.uv.y >= 0.5;
@@ -443,7 +340,10 @@ export function Device3D(props: Device3DProps) {
         live.current.onFlap(up);
         return;
       }
-      if (id === "screen" && live.current.drawArmed && h) {
+      // ONLY on the chart. The pencil now stays armed from one gesture to the next,
+      // so a check that omitted the channel would turn a tap on the settings list —
+      // or the standings, or the fire feed — into a stroke on a chart nobody can see.
+      if (id === "screen" && live.current.drawArmed && onChart(live.current) && h) {
         drawing = true;
         if (live.current.mode === "pixel") { paintAt(h); return; }
         const all = live.current.curveRef?.current;
@@ -468,11 +368,6 @@ export function Device3D(props: Device3DProps) {
         const i = rowAtUV(h.uv.y, live.current.rows?.length ?? 0);
         if (i >= 0) { sfx.tap(); live.current.onPickRow?.(i); return; }
       }
-      // Dragging the chart glass turns the CHART, not the device.
-      if (id === "screen" && live.current.screen === "chart" && !live.current.freeOrbit && !flatView) {
-        chartOrbit = { x: e.clientX, y: e.clientY };
-        return;
-      }
       if (id === "bet") { rolling = { y: e.clientY, acc: 0 }; return; }
       if (id && id !== "screen") {
         // A refused key still answers, and answers differently. Silence here reads
@@ -494,11 +389,6 @@ export function Device3D(props: Device3DProps) {
         const p = screenToCurve(h);
         const all = live.current.curveRef?.current;
         if (p && all?.length) all[all.length - 1].push(p);
-        return;
-      }
-      if (chartOrbit) {
-        world.orbitBy((chartOrbit.x - e.clientX) * 0.006, (e.clientY - chartOrbit.y) * 0.0045);
-        chartOrbit = { x: e.clientX, y: e.clientY };
         return;
       }
       if (rolling) {
@@ -565,14 +455,22 @@ export function Device3D(props: Device3DProps) {
     const onKeyDown = (ev: KeyboardEvent) => {
       const act = KEYS[ev.key];
       if (!act) return;
-      // These bindings are for the device, not for the page. Without this guard the
-      // handler swallows Space and Enter everywhere — tabbing to Share, Sound or
-      // Install and pressing either cancels the button and routes the press to the
-      // centre key instead, which is the commit. A shortcut must never be able to
-      // send a transaction on behalf of a button the user was actually aiming at.
-      const t = ev.target as HTMLElement | null;
-      if (t && t !== document.body) return;
       if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
+      // Space and Enter belong to whatever control has focus. Without this the
+      // handler swallows them everywhere — tabbing to Share, Sound or Install and
+      // pressing either cancels the button and routes the press to the centre key,
+      // which is the commit. A shortcut must never send a transaction on behalf of a
+      // button the user was actually aiming at.
+      //
+      // Scoped to those two keys ON PURPOSE. Blocking every binding whenever focus is
+      // off `document.body` looks tidier and is worse: a browser focuses a <button>
+      // when you click it, so one click on Sound would leave the whole device
+      // keyboard-dead until the user thought to click the canvas again.
+      const t = ev.target as HTMLElement | null;
+      const focusTakesKey = !!t && (
+        t.isContentEditable || ["INPUT", "TEXTAREA", "SELECT", "BUTTON", "A"].includes(t.tagName)
+      );
+      if (focusTakesKey && (ev.key === " " || ev.key === "Enter")) return;
       ev.preventDefault();
       const flap = live.current.onFlap;
       if (flap && (act === "scrollUp" || act === "scrollDown" || act === "profile" || act === "draw")) {
@@ -609,8 +507,9 @@ export function Device3D(props: Device3DProps) {
     let frameNo = 0;
     let flatten = 0;
     let gbKey = "";
+    let glyphsKey = "";
     let skinKey = live.current.skin.key;
-    let wasChannel: NonNullable<Device3DProps["screen"]> = "chart";
+    let wasChannel: NonNullable<Device3DProps["screen"]> | "flappy" = "chart";
 
     const tick = () => {
       const now = performance.now();
@@ -632,11 +531,20 @@ export function Device3D(props: Device3DProps) {
 
       // Swap exchanges what each screen carries: the settings panel takes the big
       // display, and the chart drops to the DMG in its four tones.
-      const channel = p.screen ?? "chart";
-      if (channel !== wasChannel) {
-        wasChannel = channel;
-        device.setMainTexture(channel === "chart" ? rt.texture : panelTex);
-      }
+      //
+      // Flappy is a MODE, not a channel, but it owns the whole display while it is
+      // on: the game is 2D pixel art and drawing it as geometry inside an orbiting
+      // perspective chart was the reason it never read. So it takes over whenever
+      // the chart would otherwise be up, and every other channel still wins.
+      // What the live gesture has bet, and how much of it the chain sent itself.
+      // Read BEFORE the channel branches: every one of them shows one or the other.
+      const plan = p.plan ?? [];
+      const synthetic = (p.fires ?? []).filter((f) => f.synthetic).length;
+      const base = p.screen ?? "chart";
+      const channel = base === "chart" && p.mode === "flappy" ? "flappy" : base;
+      // Every channel is the same canvas now, so there is no texture to swap — only
+      // a different thing drawn into it.
+      wasChannel = channel;
       if (channel === "settings") {
         drawControlLarge(panelCtx, p.rows ?? [], p.cursor ?? 0, !!p.editing, !!p.connected, p.skin,
           elapsed, p.open ?? null);
@@ -648,34 +556,24 @@ export function Device3D(props: Device3DProps) {
         drawAutonomy(panelCtx, p.fires ?? [], p.skin,
           p.fireState ?? { scanning: false, error: null, hasPlan: false, nextOpenSec: null });
         panelTex.needsUpdate = true;
+      } else if (channel === "flappy") {
+        // Redrawn every frame on purpose: this one is animated — parallax, wingbeat
+        // and a sweeping carriage — so there is no static state to key off.
+        flappy.draw(panelCtx, {
+          view: p.gates ?? null,
+          unsupported: !!p.flappyUnsupported,
+          // The mode's NAME lives on the second display now, so this says only the
+          // one thing the picture cannot: how to play it. And only until the player
+          // has \u2014 a permanent instruction over a live game is a permanent obstacle.
+          label: p.flappyUnsupported
+            ? "NO REFERENCE \u00b7 TRY 60s OR 5m"
+            : plan.length ? "" : "TAP TOP OR BOTTOM",
+          birdVariant: skinIndex(p.skin.key),
+          skyVariant: 4,
+        }, elapsed);
+        panelTex.needsUpdate = true;
       }
 
-      /**
-       * What the screen says it is.
-       *
-       * Only the modes that change the screen's rules announce themselves; draw is
-       * the resting state and does not need a label sitting over its own chart.
-       */
-      chartUi.setBanner(
-        channel !== "chart" ? null
-        : p.mode === "flappy"
-          ? (p.onFlap ? "FLY \u00b7 TAP TOP OR BOTTOM" : "FLAPPY \u00b7 PRESS DRAW TO FLY")
-          : p.mode === "pixel"
-            ? (p.drawArmed ? "GRID \u00b7 DRAG TO PAINT" : "GRID \u00b7 PRESS DRAW")
-            : null,
-      );
-
-      // The strip belongs to the chart: it goes when the chart goes.
-      const plan = p.plan ?? [];
-      hud.visible = channel === "chart" && plan.length > 0;
-      const hk = plan.map((l) => `${l.direction}${l.stake}`).join(",");
-      const synthetic = (p.fires ?? []).filter((f) => f.synthetic).length;
-      const sc = p.mode === "flappy" ? (p.score ?? null) : null;
-      const scKey = sc ? `${sc.hit}/${sc.resolved}/${sc.placed}` : "-";
-      if (hud.visible && `${hk}|${synthetic}|${scKey}` !== hudKey) {
-        hudKey = `${hk}|${synthetic}|${scKey}`;
-        drawHud(plan, synthetic, sc);
-      }
 
       // The DMG panel is TEXT: redraw only when something on it actually changed.
       // Re-uploading a 320x288 texture every frame for a static panel is pure waste.
@@ -690,6 +588,9 @@ export function Device3D(props: Device3DProps) {
         (p.rows ?? []).map((r) => r.value).join(",") + "|" + legs.map((l) => l.state).join(",") +
         `|${p.open ? `${p.open.row}:${p.open.selected}` : "-"}` +
         `|${drawnKey}|${p.venueLive}|${p.fires?.length ?? 0}|${p.balance}|${p.stake}` +
+        // The bets are what this panel is now mostly FOR, so a change in them has to
+        // reach the redraw key or the picture freezes on the previous gesture.
+        `|${plan.map((l) => `${l.direction}${l.stake}`).join(",")}|${p.score?.placed ?? 0}` +
         "|" + (live2d || legs.some((l) => l.state === "open") || p.planId === null ? frameNo % 20 : 0);
       if (k !== gbKey) {
         gbKey = k;
@@ -705,36 +606,33 @@ export function Device3D(props: Device3DProps) {
           cursor: p.cursor ?? 0,
           editing: !!p.editing,
           connected: !!p.connected,
-          curves: p.curveRef?.current ?? null,
-          extent,
           asset: p.asset,
           playing: channel === "chart",
-          running: !!p.onFlap,
           score: p.mode === "flappy" ? (p.score ?? null) : null,
           balance: p.balance ?? null,
           stake: p.stake,
           venueLive: p.venueLive ?? null,
+          plan,
         });
         device.markScreenDirty();
       }
 
-      // Chart.
-      const nowSec = Date.now() / 1000;
-      const horizon = p.horizonSec ?? 360;
-      refreshSeries(p.priceRef?.current ?? [], nowSec, horizon);
-      // Drawing flattens transiently; the toggle holds it. Either wants head-on.
-      flatten += ((flatView || p.drawArmed ? 1 : 0) - flatten) * Math.min(1, dt * 3.4);
-      world.setFlatten(flatten);
-      const data: ChartData = {
-        buckets, interval, extent, now: nowSec, horizonSec: horizon,
-        tint: p.skin.lanes[0],
-        legs, curves: p.curveRef?.current?.length ? p.curveRef.current : null,
-        cells: p.mode === "pixel" ? (p.cellsRef?.current ?? null) : null,
-        gates: p.mode === "flappy" ? (p.gates ?? null) : null,
-        legCount: p.legCount ?? 6,
-        planStart: p.planStartRef?.current ?? null,
-      };
-      chart.update(data, elapsed);
+      // The chart screen, drawn 2D like every other channel.
+      if (channel === "chart") {
+        const nowSec = Date.now() / 1000;
+        const horizon = p.horizonSec ?? 360;
+        refreshSeries(p.priceRef?.current ?? [], nowSec, horizon);
+        chartScene.draw(panelCtx, {
+          buckets, extent, now: nowSec, horizonSec: horizon,
+          legs, planStart: p.planStartRef?.current ?? null,
+          curves: p.curveRef?.current?.length ? p.curveRef.current : null,
+          cells: p.mode === "pixel" ? (p.cellsRef?.current ?? null) : null,
+          legCount: p.legCount ?? 6,
+          season: skinIndex(p.skin.key),
+          plan, synthetic,
+        }, elapsed);
+        panelTex.needsUpdate = true;
+      }
 
       // Every live key, and only live keys. This list had drifted: "board" and "new"
       // are gone from the union and the `as DeviceId[]` cast was hiding it, while
@@ -745,6 +643,16 @@ export function Device3D(props: Device3DProps) {
       for (const id of DEVICE_IDS) {
         device.setEnabled(id, p.enabled?.[id] !== false);
         device.setActive(id, p.active?.[id] === true);
+      }
+
+      // Repaint a cap only when its meaning actually changed. `setGlyph` rasterises
+      // a fresh 128px texture and uploads it, so doing this per frame would burn a
+      // texture upload per key per frame for a picture that never moves.
+      const glyphKey = `${p.mode}|${base}|${!!p.onFlap}`;
+      if (glyphKey !== glyphsKey) {
+        glyphsKey = glyphKey;
+        const want = glyphsFor(p.mode ?? "draw", base, !!p.onFlap);
+        for (const [id, icon] of Object.entries(want)) device.setGlyph(id as DeviceId, icon);
       }
       device.update(dt, elapsed);
 
@@ -758,9 +666,6 @@ export function Device3D(props: Device3DProps) {
         pivot.rotation.y += (Math.sin(elapsed / 5.2) * 0.09 - pivot.rotation.y) * Math.min(1, dt * 0.5);
       }
 
-      renderer.setRenderTarget(rt);
-      renderer.render(world.scene, world.camera);
-      renderer.setRenderTarget(null);
       renderer.render(scene, camera);
       raf = requestAnimationFrame(tick);
     };
@@ -774,16 +679,11 @@ export function Device3D(props: Device3DProps) {
       canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("pointerup", onUp);
       canvas.removeEventListener("pointercancel", onUp);
-      chartUi.dispose();
-      hudTex.dispose();
-      hud.geometry.dispose();
-      (hud.material as THREE.Material).dispose();
+      flappy.dispose();
+      chartScene.dispose();
       panelTex.dispose();
       field.dispose();
       device.dispose();
-      chart.dispose();
-      world.dispose();
-      rt.dispose();
       floor.geometry.dispose();
       (floor.material as THREE.Material).dispose();
       renderer.dispose();

@@ -45,3 +45,30 @@ export function priceExtent(lanes: Bucket[][]): { lo: number; hi: number } {
   const half = Math.max((hi - lo) / 2, Math.max(mid * 0.0015, 1e-9)) * 1.9;
   return { lo: mid - half, hi: mid + half };
 }
+
+/**
+ * How much of the frame is the FUTURE — the part a Curve may be drawn on.
+ *
+ * The single source for the timeline's split. `PLOT.x0` in the chart scene is
+ * derived from it, and so is the bucketiser's history window, because the two
+ * drifting apart puts the price line and the drawable span on different scales.
+ * It used to live on the 3D stage, which imported three.js and so could not be
+ * reached from a unit test.
+ */
+export const FUTURE_FRACTION = 0.56;
+
+/** Total seconds across the frame, given the future horizon it must fit. */
+export function visibleSpanOf(horizonSec: number): number {
+  return horizonSec / FUTURE_FRACTION;
+}
+
+/** Samples across the visible span. Enough to read as a line, few enough to draw. */
+const SAMPLES = 190;
+const NICE = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
+
+/** Bucket width for the timeline, derived so the span always fills the frame. */
+export function timelineInterval(horizonSec: number): number {
+  const want = visibleSpanOf(horizonSec) / SAMPLES;
+  for (const n of NICE) if (n >= want) return n;
+  return NICE[NICE.length - 1];
+}

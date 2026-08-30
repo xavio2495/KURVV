@@ -7,10 +7,10 @@ import { ASSETS, venueKeyOf, windowsFor, type Venue } from "../lib/venues";
 import { HANDLE_VARIANTS } from "../lib/handle";
 import { sfx } from "../lib/sfx";
 import { useBoard } from "../lib/useBoard";
-import type { DrawPoint } from "../lib/three/chart";
+import type { DrawPoint } from "../lib/render/types";
 import type { PixelCells } from "../lib/pixel";
 import type { FireRow } from "../lib/screen";
-import type { GatesData } from "../lib/three/gates";
+import type { FlappyView } from "../lib/flappy";
 import type { LegView, PricePoint } from "../lib/render/types";
 
 interface Props {
@@ -54,7 +54,9 @@ interface Props {
   /** Whether the selected venue has an open Window. `null` while unknown. */
   venueLive?: boolean | null;
   /** Flappy mode: the normalised gates, and the run's input while one is sweeping. */
-  gates?: Omit<GatesData, "rect"> | null;
+  gates?: FlappyView | null;
+  /** The venue publishes no reference level, so a run cannot be anchored honestly. */
+  flappyUnsupported?: boolean;
   onFlap?: ((up: boolean) => void) | null;
   onStartRun?: () => void;
   score?: { hit: number; resolved: number; placed: number } | null;
@@ -142,10 +144,16 @@ export function DeviceStage(p: Props) {
      * important action on the least obvious control.
      */
     onCommit: () => {
-      // The chart owns the centre key outright while it is up — including when there
-      // is nothing to commit, where the answer is an audible refusal rather than a
-      // silent edit-mode toggle on a row the user cannot currently see.
-      if (screen !== "chart") return false;
+      // ONLY the settings screen has rows, so only it may act on one. Every other
+      // channel claims the key — including when there is nothing to do, where the
+      // answer is an audible refusal.
+      //
+      // Testing `screen !== "chart"` here was not enough: it let the standings and
+      // autonomy channels fall through to the row logic, where the cursor defaults to
+      // WALLET and a press ran the faucet — a real 1,000 tUSDC mint from a screen
+      // showing no rows at all.
+      if (screen === "settings") return false;
+      if (screen !== "chart") { sfx.disabled(); return true; }
       if (chain?.canCommit) { sfx.commit(); chain.commit(); } else sfx.disabled();
       return true;
     },
@@ -211,6 +219,7 @@ export function DeviceStage(p: Props) {
       plan={p.plan} venueLive={p.venueLive ?? null}
       fires={p.fires} fireState={p.fireState}
       gates={p.gates} onFlap={p.onFlap ?? null} score={p.score ?? null}
+      flappyUnsupported={p.flappyUnsupported}
       balance={chain?.bal?.usdc ?? null} stake={DEFAULTS.stakes[menu.stakeIndex]}
       onPickRow={(i) => {
         menu.setCursor(i);
@@ -227,7 +236,15 @@ export function DeviceStage(p: Props) {
         selected: menu.selectedFor(openRow),
       }}
       onSelect={() => menu.press("authorise")}
-      onStrokeEnd={() => { setArmed(false); p.onStrokeEnd?.(); }}
+      /**
+       * A finished stroke does NOT disarm.
+       *
+       * Every mode is continuous play: a round ends and the next one is already
+       * running, so a gesture that has to be re-armed with a button press between
+       * every attempt is the one thing standing in the way of that. The pencil is
+       * pressed once; BACK is what puts it down.
+       */
+      onStrokeEnd={() => p.onStrokeEnd?.()}
       rows={menu.rows} cursor={menu.cursor} editing={menu.editing}
       connected={chain ? chain.connected : menu.connected}
       onKey={p.inert ? undefined : menu.press}

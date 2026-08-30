@@ -40,3 +40,6 @@ export interface LegView {
   paid?: bigint;
   entryPrice?: number;
 }
+
+/** A drawn point, normalised. `u` runs across the future span, `v` bottom-to-top. */
+export interface DrawPoint { u: number; v: number }

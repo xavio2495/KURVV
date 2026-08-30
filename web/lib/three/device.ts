@@ -82,11 +82,12 @@ const QUICK_R = 0.38;
 
 /** Which action sits where on the wheel. */
 const QUADRANTS: { id: DeviceId; icon: IconName; ax: number; ay: number }[] = [
-  // Each key names the one thing it does. The pencil is shared by both gestures —
-  // draw and grid are the same act of committing a shape, so they share a control.
+  // The glyphs here are the RESTING set. Several of these keys mean something else
+  // in another mode — the bottom key is a pen, then a grid, then a dive — and
+  // `setGlyph` repaints them so the cap says what it currently does.
   { id: "profile", icon: "person", ax: 0, ay: 1 },
   { id: "asset", icon: "token", ax: 1, ay: 0 },
-  { id: "draw", icon: "curve", ax: 0, ay: -1 },
+  { id: "draw", icon: "pen", ax: 0, ay: -1 },
   { id: "cancel", icon: "back", ax: -1, ay: 0 },
 ];
 

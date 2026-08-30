@@ -9,8 +9,8 @@ import * as THREE from "three";
  * of a second set of assets.
  */
 export type IconName =
-  | "plan" | "coins" | "curve" | "back" | "bolt" | "grid" | "swap" | "mode" | "trophy"
-  | "person" | "token" | "gear" | "play";
+  | "plan" | "coins" | "pen" | "back" | "bolt" | "grid" | "swap" | "mode" | "trophy"
+  | "person" | "token" | "gear" | "play" | "bird" | "up" | "down" | "check";
 
 const S = 128;
 
@@ -27,14 +27,85 @@ function canvas(): [HTMLCanvasElement, CanvasRenderingContext2D] {
   return [c, g];
 }
 
+const TAU = Math.PI * 2;
+
 /**
  * Every glyph has to say what the control DOES, at 26px on a moulded cap.
  *
- * A generic pencil, card and cross said "edit", "payment" and "close" — none of
- * which are what these keys do. They now read as: start a new plan, your funds,
- * draw the curve, and step back.
+ * Two rules, learned the hard way at that size. FILLED SHAPES BEAT OUTLINES: a
+ * stroked arc and a stroked circle are the same smudge on a 26px cap, and the
+ * difference between them was carrying meaning. And ONE IDEA PER GLYPH: the old
+ * back key drew an arc AND an arrowhead pointing somewhere else, the old asset key
+ * drew a cylinder that read as a database, and both cost a beat of thought that a
+ * hardware control does not get.
+ *
+ * These are also SWAPPED AT RUNTIME by `setGlyph`, so a key that means something
+ * different in another mode says so on its own face rather than in a legend.
  */
 const DRAW: Record<IconName, (g: CanvasRenderingContext2D) => void> = {
+  // Draw mode: a nib, angled, with the line it has just laid down.
+  pen: (g) => {
+    g.lineWidth = 8;
+    g.beginPath();
+    g.moveTo(94, 18);
+    g.lineTo(112, 36);
+    g.lineTo(54, 94);
+    g.lineTo(26, 104);
+    g.lineTo(36, 76);
+    g.closePath();
+    g.stroke();
+    // The slit, which is what makes it a nib rather than a wedge.
+    g.lineWidth = 5;
+    g.beginPath();
+    g.moveTo(36, 76); g.lineTo(54, 94);
+    g.stroke();
+    g.globalAlpha = 0.5;
+    g.lineWidth = 6;
+    g.beginPath();
+    g.moveTo(18, 116); g.lineTo(106, 116);
+    g.stroke();
+    g.globalAlpha = 1;
+  },
+  // Flappy: the bird, filled, with the wing and eye cut back out of it.
+  bird: (g) => {
+    g.beginPath();
+    g.arc(56, 64, 28, 0, TAU);
+    g.fill();
+    g.beginPath();
+    g.moveTo(80, 56); g.lineTo(112, 65); g.lineTo(80, 76);
+    g.closePath();
+    g.fill();
+    g.globalCompositeOperation = "destination-out";
+    g.beginPath();
+    g.arc(66, 52, 7, 0, TAU);
+    g.fill();
+    g.beginPath();
+    g.ellipse(50, 74, 16, 9, -0.35, 0, TAU);
+    g.fill();
+    g.globalCompositeOperation = "source-over";
+  },
+  // Flap up / step up. A solid arrow: at cap size a chevron alone reads as a crease.
+  up: (g) => {
+    g.beginPath();
+    g.moveTo(64, 22); g.lineTo(104, 66); g.lineTo(24, 66);
+    g.closePath();
+    g.fill();
+    g.fillRect(50, 66, 28, 40);
+  },
+  down: (g) => {
+    g.beginPath();
+    g.moveTo(64, 106); g.lineTo(104, 62); g.lineTo(24, 62);
+    g.closePath();
+    g.fill();
+    g.fillRect(50, 22, 28, 40);
+  },
+  // Confirm — what the centre key does on a list rather than on a chart.
+  check: (g) => {
+    g.lineWidth = 15;
+    g.beginPath();
+    g.moveTo(26, 66); g.lineTo(52, 94); g.lineTo(104, 34);
+    g.stroke();
+  },
   // New plan: a fresh sheet with a plus.
   plan: (g) => {
     g.lineWidth = 8;
@@ -59,45 +130,31 @@ const DRAW: Record<IconName, (g: CanvasRenderingContext2D) => void> = {
     g.moveTo(100, 46); g.lineTo(100, 86);
     g.stroke();
   },
-  // Draw: the gesture itself — a rising curve with the nib on its head.
-  curve: (g) => {
-    g.lineWidth = 8;
-    g.beginPath();
-    g.moveTo(20, 96);
-    g.bezierCurveTo(46, 96, 52, 60, 74, 44);
-    g.stroke();
-    g.beginPath();
-    g.arc(84, 38, 11, 0, Math.PI * 2);
-    g.fill();
-    g.lineWidth = 5;
-    g.globalAlpha = 0.55;
-    g.beginPath();
-    g.moveTo(20, 108); g.lineTo(108, 108);
-    g.stroke();
-    g.globalAlpha = 1;
-  },
-  // Step back: an arrow returning.
+  // Step back. It sits on the LEFT of the wheel, so it points left — a returning
+  // arc pointed up and to the right, which is the one direction it never goes.
   back: (g) => {
-    g.lineWidth = 8;
+    g.lineWidth = 11;
     g.beginPath();
-    g.arc(70, 66, 30, Math.PI * 0.85, Math.PI * 1.9, false);
+    g.moveTo(106, 64); g.lineTo(40, 64);
     g.stroke();
     g.beginPath();
-    g.moveTo(24, 40); g.lineTo(46, 62); g.lineTo(20, 70); g.closePath();
+    g.moveTo(22, 64); g.lineTo(58, 34); g.lineTo(58, 94);
+    g.closePath();
     g.fill();
   },
-  // Pixel mode: a canvas half painted.
+  // Grid mode: cells placed above and below the line that separates UP from DOWN.
+  // The line is the whole point of the mode, so it is the loudest thing in the glyph.
   grid: (g) => {
-    g.lineWidth = 7;
+    g.lineWidth = 6;
     g.beginPath();
-    g.roundRect(24, 24, 80, 80, 7);
+    g.roundRect(18, 26, 92, 76, 6);
     g.stroke();
-    g.fillRect(24, 64, 40, 40);
-    g.lineWidth = 3;
+    g.lineWidth = 5;
     g.beginPath();
-    g.moveTo(64, 24); g.lineTo(64, 104);
-    g.moveTo(24, 64); g.lineTo(104, 64);
+    g.moveTo(18, 64); g.lineTo(110, 64);
     g.stroke();
+    g.fillRect(32, 36, 22, 22);
+    g.fillRect(74, 70, 22, 22);
   },
   // Swap: two panels exchanging places.
   swap: (g) => {
@@ -145,50 +202,55 @@ const DRAW: Record<IconName, (g: CanvasRenderingContext2D) => void> = {
     g.moveTo(42, 104); g.lineTo(86, 104);
     g.stroke();
   },
-  // The trader: their name, their standings, their record.
+  // The trader: their name, their standings, their record. Filled, because two
+  // stroked arcs at cap size are two smudges rather than a person.
   person: (g) => {
-    g.lineWidth = 8;
     g.beginPath();
-    g.arc(64, 44, 20, 0, Math.PI * 2);
-    g.stroke();
+    g.arc(64, 42, 21, 0, TAU);
+    g.fill();
     g.beginPath();
-    g.arc(64, 118, 38, Math.PI * 1.16, Math.PI * 1.84);
-    g.stroke();
+    g.arc(64, 112, 38, Math.PI, 0);
+    g.closePath();
+    g.fill();
   },
-  // Which asset the chart is following.
+  // Which asset the chart is following, and that the key steps to the next one.
+  // The old cylinder read as a database; a coin with a candle in it reads as an
+  // instrument, and the chevron says the key cycles.
   token: (g) => {
     g.lineWidth = 8;
     g.beginPath();
-    g.ellipse(64, 40, 34, 14, 0, 0, Math.PI * 2);
+    g.arc(54, 64, 31, 0, TAU);
     g.stroke();
+    g.lineWidth = 6;
     g.beginPath();
-    g.moveTo(30, 40); g.lineTo(30, 88);
-    g.bezierCurveTo(30, 100, 98, 100, 98, 88);
-    g.lineTo(98, 40);
+    g.moveTo(44, 50); g.lineTo(44, 80);
+    g.moveTo(62, 42); g.lineTo(62, 88);
     g.stroke();
+    g.lineWidth = 10;
     g.beginPath();
-    g.moveTo(30, 64); g.bezierCurveTo(30, 76, 98, 76, 98, 64);
+    g.moveTo(96, 44); g.lineTo(114, 64); g.lineTo(96, 84);
     g.stroke();
   },
   // Settings.
   gear: (g) => {
-    g.lineWidth = 8;
-    const R = 30;
-    const r = 13;
+    const R = 27;
+    g.lineWidth = 10;
     g.beginPath();
-    g.arc(64, 64, r, 0, Math.PI * 2);
+    g.arc(64, 64, R, 0, TAU);
     g.stroke();
-    g.beginPath();
-    g.arc(64, 64, R, 0, Math.PI * 2);
-    g.stroke();
-    g.lineWidth = 12;
-    for (let i = 0; i < 6; i++) {
-      const a = (i / 6) * Math.PI * 2;
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * TAU;
       g.beginPath();
-      g.moveTo(64 + Math.cos(a) * (R - 2), 64 + Math.sin(a) * (R - 2));
-      g.lineTo(64 + Math.cos(a) * (R + 14), 64 + Math.sin(a) * (R + 14));
+      g.moveTo(64 + Math.cos(a) * (R + 1), 64 + Math.sin(a) * (R + 1));
+      g.lineTo(64 + Math.cos(a) * (R + 16), 64 + Math.sin(a) * (R + 16));
       g.stroke();
     }
+    // The bore, cut out rather than stroked, so the ring never fills in at size.
+    g.globalCompositeOperation = "destination-out";
+    g.beginPath();
+    g.arc(64, 64, 11, 0, TAU);
+    g.fill();
+    g.globalCompositeOperation = "source-over";
   },
   // The game mode selector.
   play: (g) => {

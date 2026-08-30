@@ -28,8 +28,16 @@ import { allocateStakes, type Leg } from "./curve.ts";
  * `ApprovalMustBeExact` depends on.
  */
 
-/** Rows either side of the centre. 3 gives a 7-row grid, which fits the display. */
-export const PIXEL_ROWS = 3;
+/**
+ * Rows either side of the centre. 6 gives a 13-row grid.
+ *
+ * Denser than it needs to be to express conviction, on purpose: at seven rows a cell
+ * was a third of the screen tall and a grid of them read as a bar chart, not as a
+ * board you paint. Thirteen rows makes each cell a marker you place. It costs
+ * nothing on chain — the row is a WEIGHT, and the weights are renormalised to sum to
+ * one either way, so the payload's shape is unchanged.
+ */
+export const PIXEL_ROWS = 6;
 
 /** Total rows drawn, centre included. */
 export const PIXEL_HEIGHT = PIXEL_ROWS * 2 + 1;

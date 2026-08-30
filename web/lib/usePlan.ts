@@ -11,7 +11,7 @@ import { useDemoAdapter } from "./wallet/demo";
 import type { CurvePoint, Leg } from "./curve";
 import type { BatchCall } from "./wallet/types";
 import type { LegView } from "./render/types";
-import type { DrawPoint } from "./three/chart";
+import type { DrawPoint } from "./render/types";
 
 /**
  * The chain half of the device.

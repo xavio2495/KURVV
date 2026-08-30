@@ -85,6 +85,73 @@ export function hasReference(refs: RefWindow[]): boolean {
 export type Verdict = "won" | "lost" | "void" | "pending" | "skipped";
 
 /**
+ * One column of the world.
+ *
+ * Positions are in WORLD units — one unit is one Window — and the reference level is
+ * the venue's own number, not a normalised height. Both are deliberate: the flight
+ * is endless, so there is no run to normalise against, and the camera that decides
+ * what is on screen belongs to the renderer, which runs at frame rate and can smooth
+ * it. A hook that normalised first would have to re-derive the camera at 16Hz and
+ * the two would visibly disagree.
+ *
+ * A gate is a HALF-PLANE. It starts at its Window's reference level and runs to the
+ * edge of the frame, because the venue sells exactly one question per Window — "at
+ * or above this line?" — and a bounded pipe with a GAP would be a price band the
+ * chain cannot settle. So a column carries one pipe from one edge, its mouth on the
+ * reference line, and never a facing pair.
+ */
+export interface GateView {
+  /** World column index. Column `n` spans `[n, n+1)`. */
+  col: number;
+  /** The Window's reference level, in the venue's own units. */
+  ref: number;
+  /** `null` for a Window the player did not call — drawn as an empty slot. */
+  dir: "UP" | "DOWN" | null;
+  verdict: Verdict;
+  /** Share of the round's stake, 0..1. Drives the pipe's width, never its height. */
+  weight: number;
+}
+
+/** Everything the scene needs to draw the flight. */
+export interface FlappyView {
+  /** Only the columns near the camera. The world is longer than the frame. */
+  gates: GateView[];
+  /**
+   * Wall-clock ms at which the bird was over world column 0.
+   *
+   * The TIME, not the position. The hook ticks at 16Hz, which is plenty for choosing
+   * which columns exist but visibly judders a scrolling world; handing over the
+   * anchor lets the renderer run the camera at frame rate off its own clock.
+   */
+  startedAt: number;
+  /** How many Windows fit across the frame. */
+  span: number;
+  /** The columns of the round being flown, `[from, to)` — what would commit. */
+  round: { from: number; to: number };
+}
+
+/**
+ * Where the bird sits across the frame, as a fraction of the width.
+ *
+ * The bird is PINNED here and the world scrolls past it. Letting the bird cross the
+ * frame instead means the run has a start and an end, which is the thing continuous
+ * play removes — and it wastes the right-hand 90% of the screen on Windows already
+ * decided rather than on the ones about to be called.
+ */
+export const BIRD_U = 0.1;
+
+/**
+ * How many Windows fit across the frame.
+ *
+ * A round is `legCount` Windows and used to fill the frame exactly, which left the
+ * player calling a Window at the instant it arrived with nothing visible ahead of
+ * it. About 30% wider, so what is coming is on screen before it has to be called.
+ */
+export function viewSpan(legCount: number): number {
+  return Math.max(4, Math.round(legCount * 1.3));
+}
+
+/**
  * THE VERDICT COMES FROM THE CHAIN, NOT FROM THE GEOMETRY.
  *
  * It is tempting to grade a column by asking whether the next Window's reference is
@@ -116,18 +183,6 @@ export function gradeRun(cells: PixelCells, refs: RefWindow[]): Verdict[] {
 }
 
 /**
- * Where the bird is at each Window boundary.
- *
- * The reference for Window n+1 IS the price at the instant Window n closed, so a run
- * of Windows is already a price series — one nailed to the same integers settlement
- * used. Spot fills can fill in between for smoothness, but the pins come from here,
- * because a few basis points of drift is enough to animate a photo finish backwards.
- */
-export function birdPath(refs: RefWindow[]): { t: number; price: number }[] {
-  return refs.filter((w) => w.strike > 0).map((w) => ({ t: w.tradingStart, price: w.strike }));
-}
-
-/**
  * Was the bird on the gate's side at the close? Presentation only — see `gradeColumn`.
  * Exposed so the renderer can place the impact, never to decide who won.
  */
@@ -136,47 +191,93 @@ export function visualHit(cell: number | undefined, w: RefWindow, next: RefWindo
   return cell > 0 ? next.strike >= w.strike : next.strike < w.strike;
 }
 
-// ── the run ────────────────────────────────────────────────────────────────
+// ── the flight ─────────────────────────────────────────────────────────────
 
-/** How long the carriage spends in each column. Eight Legs is eight seconds. */
+/** How long the bird spends over each column. One Window, one second. */
 export const COLUMN_MS = 1000;
 
+/**
+ * THE FLIGHT IS ENDLESS, AND A ROUND IS A SLICE OF IT.
+ *
+ * There is no start button and no finish line. The world scrolls, a new Window
+ * passes under the bird every `COLUMN_MS`, and every `legCount` of them is one
+ * ROUND — the slice that becomes a Plan. When a round's last column goes by, the
+ * next round is already running; nothing has to be pressed to begin it.
+ *
+ * Calls are held in ONE map keyed by absolute world column, not in a per-round
+ * array. Rounds then need no bookkeeping at all — a round is a range, and the
+ * columns of a finished round keep their calls, so a decided Window stays decided as
+ * it scrolls away behind the bird instead of blanking at the round boundary.
+ */
 export interface Run {
-  /** Wall-clock ms at which the carriage entered column 0. */
+  /** Wall-clock ms at which the bird was over world column 0. */
   startedAt: number;
-  cells: PixelCells;
   legCount: number;
+  /** World column to signed conviction. Written by `tap`, never cleared. */
+  painted: Map<number, number>;
 }
 
 export function startRun(legCount: number, now: number): Run {
-  return { startedAt: now, cells: new Array(legCount).fill(undefined), legCount };
+  return { startedAt: now, legCount, painted: new Map() };
 }
 
-/** Which column the carriage is in, or -1 once the run is over. */
+/** Which world column the bird is over. Grows without bound. */
 export function columnAt(run: Run, now: number): number {
-  const i = Math.floor((now - run.startedAt) / COLUMN_MS);
-  return i >= 0 && i < run.legCount ? i : -1;
+  return Math.floor(worldAt(run, now));
 }
 
-/** 0..1 across the whole run, for drawing the carriage between columns. */
-export function runProgress(run: Run, now: number): number {
-  return Math.min(1, Math.max(0, (now - run.startedAt) / (run.legCount * COLUMN_MS)));
+/** The bird's world position, in fractional columns — what the camera follows. */
+export function worldAt(run: Run, now: number): number {
+  return headAt(run.startedAt, now);
+}
+
+/** The same mapping from the anchor alone, for the renderer's own clock. */
+export function headAt(startedAt: number, now: number): number {
+  return Math.max(0, (now - startedAt) / COLUMN_MS);
+}
+
+/** Which round the bird is in, and the columns it covers. */
+export function roundAt(run: Run, now: number): { index: number; from: number; to: number } {
+  const index = Math.floor(columnAt(run, now) / run.legCount);
+  return { index, from: index * run.legCount, to: (index + 1) * run.legCount };
+}
+
+/** One round's calls, in the shape `cellsToPlan` takes. */
+export function roundCells(run: Run, from: number): PixelCells {
+  const out: PixelCells = new Array(run.legCount).fill(undefined);
+  for (let i = 0; i < run.legCount; i++) out[i] = run.painted.get(from + i);
+  return out;
 }
 
 /**
- * A tap while the carriage is in a column.
+ * The column a call lands on: the NEXT one, not the one underneath.
  *
- * Tapping the same side again stacks conviction; tapping the other side flips the
- * column and resets it to one. You cannot go back and fix a column once the carriage
- * has passed — that single constraint is the whole difference from pixel mode, which
- * is a considered painting where this is a rhythm you either nail or re-run.
+ * This is the difference between a game and a light show. The bird is pinned at the
+ * left of the frame, so the column it is currently over is half behind it and gone
+ * within the second — calling that one meant the pipe appeared underneath the bird
+ * and scrolled away before the player could see whether they had made it. Calling
+ * the next one puts the pipe AHEAD, in clear air, and the bird then flies into the
+ * gate it just chose. Which is flappy bird.
+ */
+export function targetAt(run: Run, now: number): number {
+  return columnAt(run, now) + 1;
+}
+
+/**
+ * A call on the Window the bird is about to reach.
+ *
+ * Calling the same side again stacks conviction; calling the other side flips the
+ * column and resets it to one. You cannot go back and fix a column once the bird has
+ * passed it — a tap only ever writes forward — and that single constraint is the
+ * whole difference from pixel mode, which is a considered painting where this is a
+ * rhythm you either nail or fly again.
  */
 export function tap(run: Run, now: number, up: boolean): boolean {
-  const c = columnAt(run, now);
-  if (c < 0) return false;
-  const cur = run.cells[c];
+  if (now < run.startedAt) return false;
+  const c = targetAt(run, now);
+  const cur = run.painted.get(c);
   const sameSide = cur !== undefined && cur !== 0 && (cur > 0) === up;
-  const magnitude = sameSide ? Math.min(PIXEL_ROWS, Math.abs(cur!) + 1) : 1;
-  run.cells[c] = up ? magnitude : -magnitude;
+  const magnitude = sameSide ? Math.min(PIXEL_ROWS, Math.abs(cur) + 1) : 1;
+  run.painted.set(c, up ? magnitude : -magnitude);
   return true;
 }

@@ -28,7 +28,17 @@ export async function readPayout(marketId: `0x${string}`): Promise<readonly bigi
     const nums = await pub.readContract({
       address: market, abi: marketAbi, functionName: "payoutNumerators",
     }) as readonly bigint[];
-    return nums?.length ? nums : null;
+    if (nums?.length) return nums;
+
+    // No vector, but the Leg is Settled — which `_tryRedeem` only reaches when the
+    // market is resolved OR voided. A void can carry no numerators, and returning
+    // null for it would leave a Leg that finished on chain rendering as "open"
+    // forever and dropped from the standings entirely. Ask directly and synthesise
+    // the vector a void means: both sides at half.
+    const voided = await pub.readContract({
+      address: market, abi: marketAbi, functionName: "isVoided",
+    }) as boolean;
+    return voided ? [1n, 1n] : null;
   } catch { return null; }
 }
 

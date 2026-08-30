@@ -94,12 +94,22 @@ async function readBoard(book: Address, me?: string): Promise<BoardRow[]> {
   if (!plans.length) return [];
 
   // ── phase 2: the Legs ────────────────────────────────────────────────────
-  const legsByPlan = await inLanes(plans, (p) => Promise.all(
-    Array.from({ length: p.n }, (_, i) =>
-      pub.readContract({ address: book, abi: planBookAbi, functionName: "getLeg", args: [BigInt(p.id), i] })
-        .then((l) => l as RawLeg)
-        .catch(() => null)),
-  ));
+  // Flattened to (plan, leg) pairs on purpose. Nesting a `Promise.all` over 8 Legs
+  // inside each of 8 lanes puts 64 requests in flight, not 8 — which is the very
+  // thing the lane bound exists to prevent.
+  const pairs = plans.flatMap((p, pi) => Array.from({ length: p.n }, (_, li) => ({ pi, li, id: p.id })));
+  const flat = await inLanes(pairs, (q) =>
+    pub.readContract({ address: book, abi: planBookAbi, functionName: "getLeg", args: [BigInt(q.id), q.li] })
+      .then((l) => l as RawLeg)
+      .catch(() => null));
+
+  const legsByPlan: (RawLeg | null)[][] = plans.map((p) => new Array(p.n).fill(null));
+  let lost = 0;
+  pairs.forEach((q, i) => { legsByPlan[q.pi][q.li] = flat[i]; if (!flat[i]) lost++; });
+  // A throttled sweep under-reports stakes and settlements just as badly as a
+  // throttled phase 1 does, so it gets the same "this is not a picture of anything"
+  // bar rather than being silently averaged over whatever survived.
+  if (pairs.length && lost > pairs.length * MAX_LOSS) return [];
 
   // ── phase 3: what the settled ones were worth ────────────────────────────
   // A settled Leg's result is NOT in the struct. Every Plan on this series shares one

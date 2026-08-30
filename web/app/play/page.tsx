@@ -16,7 +16,7 @@ import { PLAN_BOOK } from "../../lib/commit";
 import { VENUES, venueOf, EXPLORER, type Venue } from "../../lib/venues";
 import { fmtUsdc } from "../../lib/chain";
 import { sfx } from "../../lib/sfx";
-import type { DrawPoint } from "../../lib/three/chart";
+import type { DrawPoint } from "../../lib/render/types";
 import type { PricePoint } from "../../lib/render/types";
 
 /**
@@ -227,8 +227,11 @@ export default function Play() {
       if (c.length < 2) { setPreview(null); return; }
       setPreview(curveToPlan(toCurvePoints(c), { legCount: lc, totalStake: tot, minWeightShare: 0.05 }));
     } catch (e) { setPreview(null); setDrawErr((e as Error).message); }
+    // `revision` and not `cells`: a flight mutates its round in place, so the array
+    // identity only changes at a round boundary and the preview would lag a whole
+    // round behind the calls being made.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flappy.cells]);
+  }, [flappy.cells, flappy.revision]);
 
   const onStrokeEnd = useCallback(() => rebuild(mode, legCount, total), [rebuild, mode, legCount, total]);
 
@@ -247,11 +250,9 @@ export default function Play() {
     cellsRef.current = next;
   }, [legCount]);
 
+  // `rebuild` changes with the flight's revision, so this one effect now covers the
+  // continuous case too — there is no end-of-run to hang a second effect off.
   useEffect(() => { rebuild(mode, legCount, total); }, [mode, legCount, total, rebuild]);
-  // A run mutates its cells in place, so the preview is rebuilt when it ends.
-  useEffect(() => {
-    if (mode === "flappy" && !flappy.running) rebuild(mode, legCount, total);
-  }, [mode, flappy.running, legCount, total, rebuild]);
 
   /** The centre key commits whichever gesture is live. */
   const commit = useCallback(() => {
@@ -328,6 +329,7 @@ export default function Play() {
         onLegs={setLegCount} onVenue={setVenueKey} onStake={setStakeIndex}
         plan={preview ?? undefined} venueLive={venueLive}
         gates={flappy.view} onStartRun={flappy.start} score={mode === "flappy" ? flappy.score : null}
+        flappyUnsupported={mode === "flappy" && flappy.unsupported}
         onFlap={flappy.running ? flappy.tap : null}
         chain={{
           address: plan.address, bal: plan.bal, delegated: plan.delegated, dryRun: plan.dryRun,

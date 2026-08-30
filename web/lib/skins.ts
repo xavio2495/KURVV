@@ -83,6 +83,15 @@ export const SKINS: Skin[] = [
 export const DEFAULT_SKIN = "frost";
 export const skinByKey = (k: string): Skin => SKINS.find((s) => s.key === k) ?? SKINS[0];
 
+/**
+ * Where a skin sits in the list.
+ *
+ * There are seven skins and the sprite pack ships seven bird colours, so the player
+ * is chosen by the shell it flies out of rather than by a second setting nobody
+ * asked for.
+ */
+export const skinIndex = (k: string): number => Math.max(0, SKINS.findIndex((s) => s.key === k));
+
 /** Shade a hex colour toward black (t<0) or white (t>0). Used for moulded edges. */
 export function shade(hex: string, t: number): string {
   const n = parseInt(hex.slice(1), 16);
