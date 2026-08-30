@@ -10,114 +10,6 @@ import type { Skin } from "./skins";
 export const MAIN_W = 900;
 export const MAIN_H = 780;
 
-export interface MainState {
-  points: { t: number; price: number }[];
-  /** Normalised drawn Curve, `u` across the future span, `v` bottom-to-top. */
-  curve: { u: number; v: number }[] | null;
-  legCount: number;
-  elapsed: number;
-}
-
-/** A stand-in series, so the showcase reads as a live instrument with no chain. */
-export function demoSeries(elapsed: number): { t: number; price: number }[] {
-  const out: { t: number; price: number }[] = [];
-  for (let i = 0; i < 220; i++) {
-    const t = i;
-    const drift = Math.sin(i * 0.055 + elapsed * 0.18) * 620;
-    const swell = Math.sin(i * 0.017 - elapsed * 0.05) * 1450;
-    const chop = Math.sin(i * 0.41 + elapsed * 0.9) * 130;
-    out.push({ t, price: 79000 + drift + swell + chop });
-  }
-  return out;
-}
-
-export function drawMain(g: CanvasRenderingContext2D, s: MainState, skin: Skin) {
-  const W = MAIN_W;
-  const H = MAIN_H;
-  g.fillStyle = skin.ground;
-  g.fillRect(0, 0, W, H);
-
-  const pts = s.points;
-  if (pts.length < 2) return;
-
-  let lo = Infinity;
-  let hi = -Infinity;
-  for (const p of pts) { if (p.price < lo) lo = p.price; if (p.price > hi) hi = p.price; }
-  const mid = (lo + hi) / 2;
-  const half = Math.max((hi - lo) / 2, 1) * 1.7;
-  lo = mid - half;
-  hi = mid + half;
-
-  const futureFrac = 0.32;
-  const plotW = W - 40;
-  const nowX = 20 + plotW * (1 - futureFrac);
-  const xOf = (i: number) => 20 + (i / (pts.length - 1)) * (nowX - 20);
-  const yOf = (p: number) => H - 34 - ((p - lo) / (hi - lo)) * (H - 74);
-
-  // Window grid: the Legs land on these boundaries.
-  g.strokeStyle = "rgba(255,255,255,.06)";
-  g.lineWidth = 1;
-  for (let i = 0; i <= s.legCount; i++) {
-    const x = nowX + (i / s.legCount) * (W - 20 - nowX);
-    g.beginPath();
-    g.moveTo(x, 22);
-    g.lineTo(x, H - 34);
-    g.stroke();
-  }
-
-  // Four lanes at falling resolutions, in the skin's palette — the same idea as the
-  // 3D stage, flattened: the near lane jagged, the far ones smooth.
-  const hex = (n: number) => `#${n.toString(16).padStart(6, "0")}`;
-  [8, 4, 2, 1].forEach((step, li) => {
-    g.strokeStyle = hex(skin.lanes[3 - li]);
-    g.lineWidth = li === 3 ? 2.4 : 1.4;
-    g.globalAlpha = li === 3 ? 1 : 0.5;
-    g.beginPath();
-    let first = true;
-    for (let i = 0; i < pts.length; i += step) {
-      const x = xOf(i);
-      const y = yOf(pts[i].price);
-      first ? (g.moveTo(x, y), (first = false)) : g.lineTo(x, y);
-    }
-    g.stroke();
-  });
-  g.globalAlpha = 1;
-
-  // `now`.
-  g.strokeStyle = "rgba(240,160,48,.55)";
-  g.setLineDash([5, 6]);
-  g.beginPath();
-  g.moveTo(nowX, 22);
-  g.lineTo(nowX, H - 34);
-  g.stroke();
-  g.setLineDash([]);
-
-  // The drawn Curve, in the future span.
-  if (s.curve && s.curve.length > 1) {
-    g.strokeStyle = "#6bffe0";
-    g.lineWidth = 3;
-    g.lineJoin = g.lineCap = "round";
-    g.shadowColor = "rgba(107,255,224,.8)";
-    g.shadowBlur = 16;
-    g.beginPath();
-    s.curve.forEach((p, i) => {
-      const x = nowX + p.u * (W - 20 - nowX);
-      const y = 22 + (1 - p.v) * (H - 56);
-      i === 0 ? g.moveTo(x, y) : g.lineTo(x, y);
-    });
-    g.stroke();
-    g.shadowBlur = 0;
-  }
-
-  const last = pts[pts.length - 1];
-  g.fillStyle = "#e8eaed";
-  g.font = "600 26px ui-monospace, Menlo, monospace";
-  g.fillText(`$${Math.round(last.price).toLocaleString()}`, 22, 40);
-  g.fillStyle = "#6b6486";
-  g.font = "500 17px ui-sans-serif, system-ui, sans-serif";
-  g.fillText("BTC · draw the future span", 22, H - 12);
-}
-
 /**
  * The control panel at MAIN resolution, for when the two displays are swapped.
  *
@@ -169,7 +61,8 @@ export function rowAtUV(v: number, count: number): number {
  * One source for both, because a menu you can see but not press — or press but not
  * see — is the specific bug a second copy of these numbers produces.
  */
-export const OPTION_H = 62;
+/** Full height of one option row, before a long list tightens it. */
+const OPTION_H = 62;
 /** The band a dropdown may occupy. Outside it there is title bar or footer. */
 const OPTION_TOP = 96;
 const OPTION_BOTTOM = MAIN_H - 100;
@@ -219,6 +112,15 @@ export function drawControlLarge(
   skin: Skin,
   elapsed = 0,
   /**
+   * WHO IS SIGNING — the question two signing paths create.
+   *
+   * "LINKED" was enough when there was one wallet. With Privy as the default and a
+   * server-side demo signer behind it, a user has to be able to tell whether the
+   * transaction about to go out is theirs or the demo's, and a truncated hex address
+   * does not answer that.
+   */
+  signer = "",
+  /**
    * The open dropdown.
    *
    * On the big display this panel is a TOUCH surface, and a touch surface whose only
@@ -252,7 +154,7 @@ export function drawControlLarge(
   g.fillStyle = "rgba(0,0,0,.72)";
   g.font = "800 22px ui-monospace, Menlo, monospace";
   g.textAlign = "right";
-  g.fillText(connected ? "LINKED" : "NO LINK", W - 30, 52);
+  g.fillText(connected ? (signer || "LINKED").toUpperCase() : "NO LINK", W - 30, 52);
   g.textAlign = "left";
 
   // ── rows ──

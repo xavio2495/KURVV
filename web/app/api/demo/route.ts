@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createWalletClient, http, type Address, type Hex } from "viem";
+import { createWalletClient, http, parseEther, isAddress, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { shannon, pub } from "../../../lib/chain";
 import { batchExecutorAbi } from "../../../lib/abi";
@@ -33,6 +33,29 @@ function signer() {
 
 const indicator = (d: Address) => `0xef0100${d.slice(2)}`.toLowerCase();
 
+/**
+ * THE GAS DRIP — how a brand-new Privy wallet becomes able to transact.
+ *
+ * tUSDC self-mints, so collateral is a solved problem. STT is not: gas comes from
+ * Somnia's external faucet, which this app cannot trigger, so an embedded wallet
+ * created from an email address lands on the device with a balance it cannot spend.
+ * Onboarding that ends at "you have no gas" is not onboarding.
+ *
+ * Measured, not guessed: at 6 gwei the FIRST commit costs ~0.072 STT (it carries an
+ * explicit 12M gas limit — see the delegation trap below) and every later one about
+ * 0.009. A drip of 0.25 covers a first commit plus roughly twenty more.
+ *
+ * THREE THINGS KEEP THIS FROM BEING A DRAIN:
+ *   1. OFF BY DEFAULT. `DEMO_FUND_GAS` is server-side and unset unless someone opts
+ *      in, so a deployment cannot start giving funds away by accident.
+ *   2. TOP-UP, NOT PAYOUT. An address already above `GAS_FLOOR` is refused, so
+ *      calling it in a loop returns the same refusal rather than more money.
+ *   3. Testnet STT only, from the demo key, which is not the treasury.
+ */
+const GAS_DRIP = parseEther("0.25");
+const GAS_FLOOR = parseEther("0.05");
+const FUND_ENABLED = process.env.DEMO_FUND_GAS === "1";
+
 export async function GET() {
   const s = signer();
   if (!s) return NextResponse.json({ address: null, delegated: false, configured: false });
@@ -49,12 +72,33 @@ export async function POST(req: Request) {
   if (!s) return NextResponse.json({ error: "DEMO_PRIVATE_KEY is not configured" }, { status: 500 });
 
   const body = (await req.json()) as {
-    action: "send" | "sendBatch";
+    action: "send" | "sendBatch" | "fund";
     call?: { to: Address; value: string; data: Hex };
     calls?: { to: Address; value: string; data: Hex }[];
+    /** The address to top up. `fund` only. */
+    to?: Address;
   };
 
   try {
+    if (body.action === "fund") {
+      if (!FUND_ENABLED) {
+        return NextResponse.json({ error: "gas drip is disabled — set DEMO_FUND_GAS=1" }, { status: 403 });
+      }
+      // Validated, not trusted: this is the one action that moves funds to an address
+      // the CLIENT chose, so it must be a well-formed address and nothing else.
+      if (!body.to || !isAddress(body.to)) {
+        return NextResponse.json({ error: "bad address" }, { status: 400 });
+      }
+      const have = await pub.getBalance({ address: body.to });
+      if (have >= GAS_FLOOR) {
+        return NextResponse.json({ error: "already funded", balance: have.toString() }, { status: 409 });
+      }
+      const hash = await s.wallet.sendTransaction({
+        account: s.account, chain: null, to: body.to, value: GAS_DRIP,
+      });
+      return NextResponse.json({ hash });
+    }
+
     if (body.action === "send" && body.call) {
       const hash = await s.wallet.sendTransaction({
         account: s.account, chain: null,

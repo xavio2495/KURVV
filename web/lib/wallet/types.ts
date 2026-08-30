@@ -15,6 +15,14 @@ export interface BatchCall {
 export interface WalletAdapter {
   kind: "privy" | "local";
   address: Address | null;
+  /**
+   * What to call this signer on screen.
+   *
+   * `kind` is not enough: "privy" covers both an embedded wallet created from an
+   * email address and an external wallet the user already had, and telling someone
+   * their MetaMask account is a "privy" wallet is simply wrong.
+   */
+  label: string;
   ready: boolean;
   connect: () => Promise<void>;
   disconnect: () => Promise<void>;

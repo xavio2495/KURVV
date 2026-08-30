@@ -11,12 +11,16 @@ import type { BatchCall, WalletAdapter } from "./types";
  * bundle and served to everyone — which is exactly what happened here once. The
  * browser sees an address and a transaction hash, never a key.
  */
-export function useDemoAdapter(): WalletAdapter {
+export function useDemoAdapter(enabled = true): WalletAdapter {
   const [address, setAddress] = useState<Address | null>(null);
   const [delegated, setDelegated] = useState(false);
   const [ready, setReady] = useState(false);
 
   const refresh = useCallback(async () => {
+    // Privy is the default signer when it is configured, and this adapter is then
+    // constructed but never used — React forbids calling its hook conditionally. The
+    // fetch is what actually costs something, so that is what gets skipped.
+    if (!enabled) { setReady(true); return; }
     try {
       const r = await fetch("/api/demo", { cache: "no-store" });
       const j = (await r.json()) as { address: Address | null; delegated: boolean };
@@ -24,7 +28,7 @@ export function useDemoAdapter(): WalletAdapter {
       setDelegated(j.delegated);
     } catch { setAddress(null); }
     setReady(true);
-  }, []);
+  }, [enabled]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -41,6 +45,7 @@ export function useDemoAdapter(): WalletAdapter {
 
   return {
     kind: "local",
+    label: "Demo signer",
     address,
     ready,
     connect: async () => { await refresh(); },

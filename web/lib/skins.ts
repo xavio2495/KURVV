@@ -80,7 +80,6 @@ export const SKINS: Skin[] = [
   },
 ];
 
-export const DEFAULT_SKIN = "frost";
 export const skinByKey = (k: string): Skin => SKINS.find((s) => s.key === k) ?? SKINS[0];
 
 /**

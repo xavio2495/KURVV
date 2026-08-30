@@ -13,7 +13,7 @@ import { useFlappy } from "../../lib/useFlappy";
 import { useFires } from "../../lib/useFires";
 import { useWindowClock } from "../../lib/useWindowClock";
 import { PLAN_BOOK } from "../../lib/commit";
-import { VENUES, venueOf, EXPLORER, type Venue } from "../../lib/venues";
+import { venueOf, EXPLORER, type Venue } from "../../lib/venues";
 import { fmtUsdc } from "../../lib/chain";
 import { sfx } from "../../lib/sfx";
 import type { DrawPoint } from "../../lib/render/types";
@@ -334,8 +334,13 @@ export default function Play() {
         chain={{
           address: plan.address, bal: plan.bal, delegated: plan.delegated, dryRun: plan.dryRun,
           connected: !!plan.address, hasPlan: plan.planId !== null,
-          canCommit: !!preview && !plan.busy && venueLive !== false,
-          connect: plan.connect, faucet: plan.faucet, commit, cancel: plan.cancel, reset: onNew,
+          needsGas: plan.needsGas, walletLabel: plan.walletLabel,
+          // A wallet that cannot pay for gas cannot commit. Without this the centre
+          // key sends a transaction that is certain to fail, and the user is told
+          // "reverted" when the real answer is "you have no STT".
+          canCommit: !!preview && !plan.busy && venueLive !== false && !plan.needsGas,
+          connect: plan.connect, faucet: plan.faucet, fundGas: plan.fundGas,
+          commit, cancel: plan.cancel, reset: onNew,
         }}
       />
 

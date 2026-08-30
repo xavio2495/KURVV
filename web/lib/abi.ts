@@ -53,7 +53,6 @@ export const planBookAbi = [
   { type: "event", name: "PlanCancelled", inputs: [{ name: "planId", type: "uint256", indexed: true }, { name: "refunded", type: "uint96" }] },
 ] as const;
 
-export const LEG_STATE = ["Pending", "Open", "Settled", "Skipped"] as const;
 export const SKIP_REASON = [
   "None", "WrongEmitter", "WrongTopic", "WrongSeries", "PlanNotLive", "PlanComplete",
   "MarketNotTrading", "WindowTooShort", "NoLiquidity", "StakeTooSmall", "DryRun",

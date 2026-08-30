@@ -11,4 +11,3 @@ export const shannon = defineChain({
 export const pub = createPublicClient({ chain: shannon, transport: http() });
 
 export const fmtUsdc = (v: bigint, dp = 4) => (Number(v) / 1e6).toFixed(dp);
-export const fmtStt = (v: bigint, dp = 4) => (Number(v) / 1e18).toFixed(dp);

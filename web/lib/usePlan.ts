@@ -7,7 +7,7 @@ import { buildCommit, buildCommitFromLegs, PLAN_BOOK } from "./commit";
 import { ADDR, EXPLORER, type Venue } from "./venues";
 import { gradeVector } from "./outcome";
 import { payoutCache } from "./payout";
-import { useDemoAdapter } from "./wallet/demo";
+import { useWallet } from "./wallet";
 import type { CurvePoint, Leg } from "./curve";
 import type { BatchCall } from "./wallet/types";
 import type { LegView } from "./render/types";
@@ -40,6 +40,16 @@ const clearSaved = () => { try { localStorage.removeItem(SAVE_KEY); } catch {} }
 
 const ZERO = `0x${"0".repeat(64)}`;
 
+/**
+ * Below this a wallet cannot be relied on to land a commit.
+ *
+ * 0.05 STT at 6 gwei is well under one first commit (~0.072 STT, which carries an
+ * explicit 12M gas limit) and comfortably over an ordinary one (~0.009). It matches
+ * the server's own refusal threshold in `/api/demo`; the two are stated separately
+ * on purpose, because a client constant must never be what decides whether funds move.
+ */
+const GAS_FLOOR = 50_000_000_000_000_000n;
+
 export interface PlanState {
   address?: Address;
   bal: { stt: bigint; usdc: bigint } | null;
@@ -52,8 +62,20 @@ export interface PlanState {
   tx: Hex | null;
   planStartRef: React.RefObject<number | null>;
   legsRef: React.RefObject<LegView[]>;
+  /** What to call the signer on screen — "Email wallet", "Metamask", "Demo signer". */
+  walletLabel: string;
+  /**
+   * Connected, but with no STT to pay for gas.
+   *
+   * The defining failure of a fresh embedded wallet, and it must be its own state:
+   * "connected with an empty balance" and "not connected" look identical on a
+   * balance readout and need completely different things from the user.
+   */
+  needsGas: boolean;
   connect: () => Promise<void>;
   faucet: () => Promise<void>;
+  /** Top up gas from the demo signer. Refused unless `DEMO_FUND_GAS=1`. */
+  fundGas: () => Promise<void>;
   commit: (curve: DrawPoint[], toPoints: (c: DrawPoint[]) => CurvePoint[], venue: Venue, legCount: number, total: bigint) => Promise<void>;
   /** The same commit from an already-decided schedule — pixel mode's path. */
   commitLegs: (legs: Leg[], venue: Venue, total: bigint, cells: (number | null)[]) => Promise<void>;
@@ -64,8 +86,12 @@ export interface PlanState {
 }
 
 export function usePlan(venue: Venue): PlanState {
-  // The demo wallet signs SERVER-SIDE; the browser never holds a key.
-  const local = useDemoAdapter();
+  /**
+   * Whoever is signing: a Privy wallet when Privy is configured, the server-side
+   * demo signer otherwise. Every call below goes through the `WalletAdapter`
+   * interface, so nothing in this file knows or cares which one it got.
+   */
+  const local = useWallet();
   const [bal, setBal] = useState<{ stt: bigint; usdc: bigint } | null>(null);
   const [delegated, setDelegated] = useState<boolean | null>(null);
   const [dryRun, setDryRun] = useState<boolean | null>(null);
@@ -238,6 +264,28 @@ export function usePlan(venue: Venue): PlanState {
     } catch (e) { setErr((e as Error).message.split("\n")[0]); } finally { setBusy(null); }
   }, [local, refreshAccount]);
 
+  /**
+   * Ask the demo signer for enough STT to transact.
+   *
+   * Deliberately NOT automatic on connect. It moves real testnet funds, the endpoint
+   * is off unless someone opted in, and a silent transfer the user did not ask for
+   * is the wrong default even when the amount is small.
+   */
+  const fundGas = useCallback(async () => {
+    if (!local.address) return;
+    setErr(null); setBusy("Sending gas…");
+    try {
+      const r = await fetch("/api/demo", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "fund", to: local.address }),
+      });
+      const j = (await r.json()) as { hash?: Hex; error?: string };
+      if (!j.hash) throw new Error(j.error ?? "could not send gas");
+      await pub.waitForTransactionReceipt({ hash: j.hash });
+      await refreshAccount();
+    } catch (e) { setErr((e as Error).message.split("\n")[0]); } finally { setBusy(null); }
+  }, [local, refreshAccount]);
+
   const connect = useCallback(async () => {
     setErr(null);
     try { await local.connect(); await refreshAccount(); }
@@ -301,8 +349,13 @@ export function usePlan(venue: Venue): PlanState {
 
   return {
     address: local.address ?? undefined,
+    walletLabel: local.label,
+    // Only once a balance has actually been read. `bal === null` is "not known yet",
+    // and treating that as "needs gas" would flash a funding prompt at every user on
+    // every load, including the ones who are already funded.
+    needsGas: !!local.address && bal !== null && bal.stt < GAS_FLOOR,
     bal, delegated, dryRun, planId, legs, busy, err, tx,
     planStartRef, legsRef,
-    connect, faucet, commit, commitLegs, cancel, reset, restored,
+    connect, faucet, fundGas, commit, commitLegs, cancel, reset, restored,
   };
 }

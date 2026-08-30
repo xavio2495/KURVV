@@ -8,7 +8,7 @@ import { shade, type Skin } from "../skins";
  * The KURVV handheld — landscape, two screens, one click wheel.
  *
  * Layout, left to right:
- *   MAIN SCREEN   the 3D chart, and the configuration surface when swapped
+ *   MAIN SCREEN   whichever channel is up, drawn 2D and uploaded as a texture
  *   RIGHT COLUMN  the mark, the DMG panel, a connect key, the click wheel with four
  *                 quadrant actions and a centre select, a knurled bet-price wheel on
  *                 the outer edge with its stake readout, and two quick-action caps

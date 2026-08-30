@@ -76,7 +76,6 @@ export interface Device3DProps {
   asset?: string;
   legCount?: number;
   mode?: Mode;
-  swapped?: boolean;
   /** True while the pencil is armed: the screen becomes a drawing surface. */
   drawArmed?: boolean;
   onStrokeEnd?: () => void;
@@ -84,6 +83,8 @@ export interface Device3DProps {
   cursor?: number;
   editing?: boolean;
   connected?: boolean;
+  /** What to call the active signer — "Email wallet", "Metamask", "Demo signer". */
+  walletLabel?: string;
   onKey?: (id: DeviceId) => void;
   /**
    * Set only while a flappy run is sweeping. It takes over the top and bottom keys,
@@ -142,10 +143,11 @@ const DETENT = 0.4;
 /**
  * The device, rendered as one WebGL context.
  *
- * The chart is a separate scene drawn into a render target, and that target's
- * texture IS the device's main screen. Two things fall out of that: the whole page
- * costs one context instead of two, and the screen becomes a real surface — a ray
- * can hit it, which is what makes the display a touch surface you draw on.
+ * WebGL draws exactly one thing here: the machine itself. Every SCREEN it shows —
+ * chart, grid, flappy, settings, standings, autonomy — is a 2D canvas uploaded as
+ * one texture. Two things fall out of that: the whole page costs one context, and
+ * the display is a real surface a ray can hit, which is what makes it a touch
+ * surface you draw on.
  */
 export function Device3D(props: Device3DProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -276,7 +278,6 @@ export function Device3D(props: Device3DProps) {
     let held: DeviceId | null = null;
     let rolling: { y: number; acc: number } | null = null;
     let drawing = false;
-    let chartOrbit: { x: number; y: number } | null = null;
     /** Once the user has turned it themselves, the idle drift stops fighting them. */
     let touched = false;
 
@@ -436,7 +437,6 @@ export function Device3D(props: Device3DProps) {
       }
       orbiting = null;
       rolling = null;
-      chartOrbit = null;
     };
 
     /**
@@ -505,11 +505,9 @@ export function Device3D(props: Device3DProps) {
     let last = performance.now();
     const t0 = last;
     let frameNo = 0;
-    let flatten = 0;
     let gbKey = "";
     let glyphsKey = "";
     let skinKey = live.current.skin.key;
-    let wasChannel: NonNullable<Device3DProps["screen"]> | "flappy" = "chart";
 
     const tick = () => {
       const now = performance.now();
@@ -542,12 +540,9 @@ export function Device3D(props: Device3DProps) {
       const synthetic = (p.fires ?? []).filter((f) => f.synthetic).length;
       const base = p.screen ?? "chart";
       const channel = base === "chart" && p.mode === "flappy" ? "flappy" : base;
-      // Every channel is the same canvas now, so there is no texture to swap — only
-      // a different thing drawn into it.
-      wasChannel = channel;
       if (channel === "settings") {
         drawControlLarge(panelCtx, p.rows ?? [], p.cursor ?? 0, !!p.editing, !!p.connected, p.skin,
-          elapsed, p.open ?? null);
+          elapsed, p.walletLabel ?? "", p.open ?? null);
         panelTex.needsUpdate = true;
       } else if (channel === "board") {
         drawBoard(panelCtx, p.board ?? [], p.skin, !!p.boardSample);
@@ -584,7 +579,7 @@ export function Device3D(props: Device3DProps) {
       // panel has to tick; with the control page on it, nothing does unless a value
       // changed. Both cases are the same key, read differently.
       const live2d = channel !== "chart";
-      const k = `${channel}|${p.cursor}|${p.editing}|${p.connected}|${p.mode}|${p.planId}|${p.legCount}|` +
+      const k = `${channel}|${p.cursor}|${p.editing}|${p.connected}|${p.walletLabel}|${p.mode}|${p.planId}|${p.legCount}|` +
         (p.rows ?? []).map((r) => r.value).join(",") + "|" + legs.map((l) => l.state).join(",") +
         `|${p.open ? `${p.open.row}:${p.open.selected}` : "-"}` +
         `|${drawnKey}|${p.venueLive}|${p.fires?.length ?? 0}|${p.balance}|${p.stake}` +

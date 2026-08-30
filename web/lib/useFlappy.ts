@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  BIRD_U, columnAt, gradeColumn, hasReference, refSeries, roundAt, roundCells,
+  BIRD_U, gradeColumn, hasReference, refSeries, roundAt, roundCells,
   startRun, tap as tapRun, viewSpan, worldAt,
   type FlappyView, type GateView, type RefWindow, type Run,
 } from "./flappy";

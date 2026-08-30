@@ -40,16 +40,6 @@ export function circleHole(cx: number, cy: number, r: number): THREE.Path {
   return p;
 }
 
-/** The clear shell, shared by every object on the float layer. */
-export function clearShell(env: THREE.Texture, tint: number): THREE.MeshPhysicalMaterial {
-  return new THREE.MeshPhysicalMaterial({
-    color: tint, transmission: 1, transparent: true,
-    roughness: 0.24, metalness: 0, ior: 1.47, thickness: 0.42,
-    clearcoat: 1, clearcoatRoughness: 0.18, envMap: env, envMapIntensity: 1.5,
-    attenuationColor: new THREE.Color(0xdfe6ec), attenuationDistance: 2.4,
-  });
-}
-
 /**
  * Extrude a shape and sit its FRONT face on z = 0.
  *
@@ -151,18 +141,4 @@ export function knurlBump(opts: {
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.repeat.set(opts.repeat, 1);
   return t;
-}
-
-/** Recompute planar UVs from the bounding box, so a face texture maps predictably. */
-export function planarUV(geo: THREE.BufferGeometry) {
-  geo.computeBoundingBox();
-  const b = geo.boundingBox!;
-  const w = b.max.x - b.min.x;
-  const h = b.max.y - b.min.y;
-  const pos = geo.attributes.position;
-  const uv = geo.attributes.uv;
-  for (let i = 0; i < pos.count; i++) {
-    uv.setXY(i, (pos.getX(i) - b.min.x) / w, (pos.getY(i) - b.min.y) / h);
-  }
-  uv.needsUpdate = true;
 }

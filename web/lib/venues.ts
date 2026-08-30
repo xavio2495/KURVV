@@ -160,8 +160,6 @@ export function venueKeyOf(windowIndex: number, assetIndex: number): VenueKey {
   return `${list[Math.min(windowIndex, list.length - 1)].key}-${slug(asset)}` as VenueKey;
 }
 
-/** Every venue key, for callers that need to sweep them. */
-export const VENUE_KEYS = Object.keys(VENUES) as VenueKey[];
 
 /**
  * Look a venue up. Not every (window, asset) pair exists — SOMI has one window and

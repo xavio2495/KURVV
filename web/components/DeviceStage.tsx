@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { Device3D, type DeviceId, type Mode } from "./Device3D";
+import { Device3D, type Mode } from "./Device3D";
 import { useDeviceMenu, DEFAULTS } from "../lib/useDeviceMenu";
 import { SKINS, skinByKey } from "../lib/skins";
 import { ASSETS, venueKeyOf, windowsFor, type Venue } from "../lib/venues";
@@ -42,10 +42,15 @@ interface Props {
     delegated: boolean | null;
     dryRun: boolean | null;
     connected: boolean;
+    /** Connected but unable to pay for gas — its own state, not a small balance. */
+    needsGas: boolean;
+    /** What to call the signer: "Email wallet", "Metamask", "Demo signer". */
+    walletLabel: string;
     hasPlan: boolean;
     canCommit: boolean;
     connect: () => void | Promise<void>;
     faucet: () => void | Promise<void>;
+    fundGas: () => void | Promise<void>;
     commit: () => void;
     cancel: () => void | Promise<void>;
     reset: () => void;
@@ -95,8 +100,17 @@ export function DeviceStage(p: Props) {
   const board = useBoard(chain?.address, p.planId ?? -1);
   const menu = useDeviceMenu(skin, (k) => { setSkinKey(k); p.onSkin?.(k); }, DEFAULTS, {
     address: chain?.address,
+    /**
+     * The WALLET row says what to DO next, not what is true.
+     *
+     * A row reading `0x1a2b…c3d4` on a wallet that cannot pay for gas is accurate and
+     * useless — the address is not the thing standing between the user and a trade.
+     * So an unfunded wallet says NO GAS, and pressing the row fixes it.
+     */
     walletLabel: chain
-      ? (chain.address ? `${chain.address.slice(0, 6)}…${chain.address.slice(-4)}` : "CONNECT")
+      ? (!chain.address ? "CONNECT"
+        : chain.needsGas ? "NO GAS"
+        : `${chain.address.slice(0, 6)}…${chain.address.slice(-4)}`)
       : undefined,
     onSwap: () => { sfx.swap(); setOpenRow(null); setScreen((c) => (c === "chart" ? "settings" : "chart")); },
     // The play key steps the game: a curve, a grid, and the one still being designed.
@@ -128,10 +142,18 @@ export function DeviceStage(p: Props) {
       if (screen !== "chart") { setScreen("chart"); return; }
       if (chain?.hasPlan) void chain.cancel();
     },
-    // Selecting the WALLET row connects, or tops up once connected.
+    /**
+     * The WALLET row, pressed. One key, three jobs, in the order a new user hits them:
+     * connect -> get gas -> get collateral. Each stage only appears once the one
+     * before it is done, so the key always does the single next useful thing.
+     */
     onConnect: () => {
       if (!chain) return;
-      if (chain.connected) { void chain.faucet(); return; }
+      if (chain.connected) {
+        if (chain.needsGas) { void chain.fundGas(); return; }
+        void chain.faucet();
+        return;
+      }
       void chain.connect();
       // Land on NAME once the address exists. The board is why the name matters, and
       // a name picked later would not be on the Plan that earned the place.
@@ -247,6 +269,7 @@ export function DeviceStage(p: Props) {
       onStrokeEnd={() => p.onStrokeEnd?.()}
       rows={menu.rows} cursor={menu.cursor} editing={menu.editing}
       connected={chain ? chain.connected : menu.connected}
+      walletLabel={chain?.walletLabel}
       onKey={p.inert ? undefined : menu.press}
       onScroll={p.inert ? undefined : (step) => {
         // On the chart the settings list is not even on screen, so moving a cursor

@@ -9,8 +9,8 @@ import * as THREE from "three";
  * of a second set of assets.
  */
 export type IconName =
-  | "plan" | "coins" | "pen" | "back" | "bolt" | "grid" | "swap" | "mode" | "trophy"
-  | "person" | "token" | "gear" | "play" | "bird" | "up" | "down" | "check";
+  | "pen" | "grid" | "bird" | "up" | "down" | "check"
+  | "back" | "bolt" | "person" | "token" | "gear" | "play";
 
 const S = 128;
 
@@ -106,30 +106,6 @@ const DRAW: Record<IconName, (g: CanvasRenderingContext2D) => void> = {
     g.moveTo(26, 66); g.lineTo(52, 94); g.lineTo(104, 34);
     g.stroke();
   },
-  // New plan: a fresh sheet with a plus.
-  plan: (g) => {
-    g.lineWidth = 8;
-    g.beginPath();
-    g.roundRect(28, 20, 62, 82, 8);
-    g.stroke();
-    g.beginPath();
-    g.moveTo(59, 44); g.lineTo(59, 78);
-    g.moveTo(42, 61); g.lineTo(76, 61);
-    g.stroke();
-  },
-  // Funds: a stack of coins, not a payment card.
-  coins: (g) => {
-    g.lineWidth = 7;
-    for (const y of [86, 66, 46]) {
-      g.beginPath();
-      g.ellipse(64, y, 36, 13, 0, 0, Math.PI * 2);
-      g.stroke();
-    }
-    g.beginPath();
-    g.moveTo(28, 46); g.lineTo(28, 86);
-    g.moveTo(100, 46); g.lineTo(100, 86);
-    g.stroke();
-  },
   // Step back. It sits on the LEFT of the wheel, so it points left — a returning
   // arc pointed up and to the right, which is the one direction it never goes.
   back: (g) => {
@@ -155,52 +131,6 @@ const DRAW: Record<IconName, (g: CanvasRenderingContext2D) => void> = {
     g.stroke();
     g.fillRect(32, 36, 22, 22);
     g.fillRect(74, 70, 22, 22);
-  },
-  // Swap: two panels exchanging places.
-  swap: (g) => {
-    g.lineWidth = 6;
-    g.beginPath();
-    g.roundRect(16, 22, 42, 40, 6);
-    g.roundRect(70, 66, 42, 40, 6);
-    g.stroke();
-    g.lineWidth = 7;
-    g.beginPath();
-    g.moveTo(66, 42); g.lineTo(104, 42); g.moveTo(92, 30); g.lineTo(104, 42); g.lineTo(92, 54);
-    g.moveTo(62, 86); g.lineTo(24, 86); g.moveTo(36, 74); g.lineTo(24, 86); g.lineTo(36, 98);
-    g.stroke();
-  },
-  // Mode: the two input modes, one active.
-  mode: (g) => {
-    g.lineWidth = 7;
-    g.beginPath();
-    g.moveTo(18, 84);
-    g.bezierCurveTo(40, 84, 44, 50, 62, 40);
-    g.stroke();
-    g.beginPath();
-    g.roundRect(70, 56, 42, 42, 5);
-    g.stroke();
-    g.fillRect(70, 77, 21, 21);
-  },
-  // Standings: a cup on its plinth.
-  trophy: (g) => {
-    g.lineWidth = 7;
-    g.beginPath();
-    g.moveTo(40, 22); g.lineTo(88, 22); g.lineTo(84, 60);
-    g.bezierCurveTo(82, 76, 74, 82, 64, 82);
-    g.bezierCurveTo(54, 82, 46, 76, 44, 60);
-    g.closePath();
-    g.stroke();
-    g.beginPath();
-    g.moveTo(40, 30); g.bezierCurveTo(20, 32, 20, 56, 42, 58);
-    g.moveTo(88, 30); g.bezierCurveTo(108, 32, 108, 56, 86, 58);
-    g.stroke();
-    g.beginPath();
-    g.moveTo(64, 82); g.lineTo(64, 96);
-    g.stroke();
-    g.lineWidth = 8;
-    g.beginPath();
-    g.moveTo(42, 104); g.lineTo(86, 104);
-    g.stroke();
   },
   // The trader: their name, their standings, their record. Filled, because two
   // stroked arcs at cap size are two smudges rather than a person.
@@ -278,49 +208,6 @@ const DRAW: Record<IconName, (g: CanvasRenderingContext2D) => void> = {
 export function iconTexture(name: IconName): THREE.Texture {
   const [c, g] = canvas();
   DRAW[name](g);
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  t.anisotropy = 8;
-  return t;
-}
-
-/** A soft radial bloom, used additively as the backlight behind each glyph. */
-export function glowTexture(): THREE.Texture {
-  const [c, g] = canvas();
-  const grad = g.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
-  grad.addColorStop(0, "rgba(255,255,255,0.95)");
-  grad.addColorStop(0.42, "rgba(255,255,255,0.34)");
-  grad.addColorStop(1, "rgba(255,255,255,0)");
-  g.fillStyle = grad;
-  g.fillRect(0, 0, S, S);
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  return t;
-}
-
-
-/**
- * A short silkscreen caption. The size is FITTED to the canvas, because a fixed size
- * clips the long words against a fixed-width texture.
- */
-export function textTexture(label: string, colour: string): THREE.Texture {
-  const c = document.createElement("canvas");
-  c.width = 512;
-  c.height = 128;
-  const g = c.getContext("2d")!;
-  const spacing = 8;
-  let px = 92;
-  const fits = () => {
-    g.font = `700 ${px}px -apple-system, "Segoe UI", system-ui, sans-serif`;
-    return g.measureText(label).width + spacing * label.length <= c.width - 28;
-  };
-  while (px > 20 && !fits()) px -= 2;
-  g.clearRect(0, 0, c.width, c.height);
-  g.fillStyle = colour;
-  g.textAlign = "center";
-  g.textBaseline = "middle";
-  g.letterSpacing = `${spacing}px`;
-  g.fillText(label.toUpperCase(), c.width / 2, c.height / 2);
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   t.anisotropy = 8;
