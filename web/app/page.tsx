@@ -1,78 +1,132 @@
 import Link from "next/link";
-import { DeviceStage } from "../components/DeviceStage";
+import { Morph } from "../components/landing/Morph";
+import { ModePlay } from "../components/landing/ModePlay";
+import { StageLazy } from "../components/landing/StageLazy";
+import { HScroll } from "../components/HScroll";
+import { AT } from "../lib/landing/evolution";
 
 /**
- * The presentation layer.
+ * The landing page is a horizontal platformer.
  *
- * The device floats small here and turns freely — it is the product shown as an
- * object, not the product being used. Everything that actually trades lives at
- * /play.
+ * You scroll down; the world moves left. Six full-viewport panels ride a track that
+ * is translated on X by the single scroll scalar in `lib/landing/evolution.ts`, and
+ * the world behind them is one continuous side-scrolling strip that changes material
+ * as you travel: night, industry, winter, summer, neon, and finally all four at once
+ * under the device.
+ *
+ * The canvas is decoration. Every word here is real DOM above it, and the panels are
+ * ordinary flow content — so the page reads correctly as text no matter where the
+ * world has got to.
  */
+
+/** Where each headline's font morph begins and ends, relative to its panel. */
+const morph = (at: number) => ({ from: at - 0.15, to: at - 0.03 });
+
+const FOOT = (
+  <footer className="lp-foot">
+    <span>Somnia Shannon testnet · settles in tUSDC</span>
+  </footer>
+);
+
 export default function Home() {
   return (
-    <main className="home">
-      <section className="home-hero">
-        <div className="home-copy">
-          <h1>KURVV</h1>
-          <p className="home-tag">Draw the market. The chain trades it.</p>
-          <p className="home-lede">
-            One hand-drawn curve becomes an autonomous sequence of real Event Contract
-            positions that execute themselves, leg by leg, over the next few hours.
-            No keeper. No cron. No backend holding a hot key and hoping it stays up.
+    <HScroll panels={6} className="lp" chrome={FOOT}>
+      <header className="hs-panel lp-hero" id="top">
+        <h1 className="lp-wordmark">KURVV</h1>
+        <p className="lp-tag">Draw the market. The chain trades it.</p>
+        <p className="lp-scrollcue">Scroll</p>
+      </header>
+
+      <section className="hs-panel" id="about">
+        <div className="lp-copy">
+          <span className="lp-num">01 · Industry</span>
+          <Morph as="h2" className="lp-h" {...morph(AT.about)}>
+            One gesture. Real positions.
+          </Morph>
+          <p className="lp-lede">
+            You draw where you think the market goes. KURVV reads a direction from
+            each segment of that line and a conviction from its slope, then commits
+            the whole schedule on-chain in a single transaction.
           </p>
-          <div className="home-cta">
-            <Link className="btn btn-primary" href="/play">Open the device</Link>
-            <Link className="btn" href="/pitch">Read the pitch</Link>
+          <p className="lp-lede">
+            From there nothing off-chain is awake. A Somnia Reactivity subscription
+            opens the next position the moment the previous one settles — validators
+            invoke it as a synthetic transaction. No keeper, no cron, no backend
+            holding a hot key and hoping it stays up.
+          </p>
+          <dl className="lp-facts">
+            <div><dt>Positions per gesture</dt><dd>4–8</dd></div>
+            <div><dt>Signatures required</dt><dd>One</dd></div>
+            <div><dt>Approval</dt><dd>Exactly your stake</dd></div>
+            <div><dt>Settles in</dt><dd>tUSDC</dd></div>
+          </dl>
+        </div>
+      </section>
+
+      <section className="hs-panel lp-mode" id="draw">
+        <div className="lp-copy">
+          <span className="lp-num">02 · Winter</span>
+          <Morph as="h2" className="lp-h" {...morph(AT.draw)}>
+            Sketch the curve.
+          </Morph>
+          <p className="lp-lede">
+            Drag a line across the chart. Each segment becomes one Leg on its own
+            expiry Window, and the steepness of that segment becomes its share of the
+            stake — so a flat-then-sharp curve stakes differently from a steady
+            climb, even when both end in the same place.
+          </p>
+        </div>
+        <ModePlay mode="draw" label="Draw mode · running" />
+      </section>
+
+      <section className="hs-panel lp-mode lp-flip" id="pixel">
+        <div className="lp-copy">
+          <span className="lp-num">03 · Summer</span>
+          <Morph as="h2" className="lp-h" {...morph(AT.pixel)}>
+            Place the bets.
+          </Morph>
+          <p className="lp-lede">
+            Same engine, coarser input. Tap cells on a grid of time against price and
+            each filled cell becomes a Leg. It is the fastest way to express a view
+            that is not a smooth line — a gap, a spike, a range you expect to hold.
+          </p>
+        </div>
+        <ModePlay mode="pixel" label="Grid mode · running" />
+      </section>
+
+      <section className="hs-panel lp-mode" id="flappy">
+        <div className="lp-copy">
+          <span className="lp-num">04 · Neon</span>
+          <Morph as="h2" className="lp-h" {...morph(AT.flappy)}>
+            Call it, gate by gate.
+          </Morph>
+          <p className="lp-lede">
+            Up or down, one Window at a time, at the speed the market actually moves.
+            Once a gate is called it locks — you cannot watch the price turn and
+            change your answer — and the line behind the bird is the real print, not
+            a simulation.
+          </p>
+        </div>
+        <ModePlay mode="flappy" label="Flappy mode · running" />
+      </section>
+
+      <section className="hs-panel lp-last" id="play">
+        <StageLazy />
+        <div className="lp-outro lp-copy">
+          <Morph as="h2" className="lp-h lp-h-big" {...morph(AT.play)}>
+            Try it out
+          </Morph>
+          <p className="lp-lede">
+            Live on Somnia Shannon testnet. Sign in with an email, take test tUSDC
+            from the faucet, and draw. The positions are real Event Contracts.
+          </p>
+          <div className="lp-cta">
+            <Link className="lp-btn lp-btn-go" href="/play">Play now</Link>
+            <Link className="lp-btn" href="/how-it-works">How it works</Link>
+            <Link className="lp-btn" href="/board">Leaderboard</Link>
           </div>
-          <p className="home-note">Drag the device to turn it.</p>
-        </div>
-        <div className="home-device">
-          <DeviceStage fill={0.78} freeOrbit idleSpin />
         </div>
       </section>
-
-      <section className="home-grid">
-        <article>
-          <h3>Draw a view</h3>
-          <p>
-            Sketch where you think BTC goes. Each segment becomes one Leg; the slope of
-            that segment becomes its conviction, and conviction becomes its share of
-            the stake.
-          </p>
-        </article>
-        <article>
-          <h3>Commit once</h3>
-          <p>
-            One signature approves <strong>exactly</strong> the total you staked —
-            never an unlimited allowance — and opens the first Leg in the same
-            transaction, so a Plan can never exist without its first position.
-          </p>
-        </article>
-        <article>
-          <h3>The chain runs it</h3>
-          <p>
-            A Somnia Reactivity subscription opens the next Leg the moment the previous
-            one settles. Validators invoke it as a synthetic transaction. Nothing
-            off-chain is awake.
-          </p>
-        </article>
-        <article>
-          <h3>Paid per Leg</h3>
-          <p>
-            Settlement is per Window, so proceeds arrive Leg by Leg rather than at the
-            end. Cancel any time and whatever has not been deployed comes back.
-          </p>
-        </article>
-      </section>
-
-      <footer className="home-foot">
-        <span>Somnia Shannon testnet · settles in tUSDC</span>
-        <nav>
-          <Link href="/play">Play</Link>
-          <Link href="/pitch">Pitch</Link>
-          <Link href="/device">Hardware</Link>
-        </nav>
-      </footer>
-    </main>
+    </HScroll>
   );
 }

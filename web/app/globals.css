@@ -6,7 +6,11 @@
 * { box-sizing: border-box; }
 
 html, body {
-  margin: 0; padding: 0; height: 100%; overflow: hidden;
+  /* `min-height`, not `height`: a fixed 100% makes BODY the scroll box, which
+   * pins `window.scrollY` at 0 and silently breaks anything reading page scroll.
+   * The full-screen surfaces (`.play`, `.showcase`) are `position: fixed` and
+   * never needed the fixed height. */
+  margin: 0; padding: 0; min-height: 100%;
   background: #000; color: #e8eaed;
   font: 13px/1.45 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
   font-variant-numeric: tabular-nums;          /* a ticking number must not reflow */
@@ -54,7 +58,8 @@ button { font: inherit; color: inherit; }
 }
 
 /* ── shared page furniture ─────────────────────────────────────────────────── */
-html, body { overflow: auto; background: #0b0a12; }
+html { overflow-y: auto; }
+html, body { background: #0b0a12; }
 a { color: inherit; text-decoration: none; }
 
 .btn {
@@ -70,28 +75,267 @@ a { color: inherit; text-decoration: none; }
 }
 .btn-primary:hover { filter: brightness(1.06); background: linear-gradient(#ffd76a, #f0a030); }
 
-/* ── home ─────────────────────────────────────────────────────────────────── */
-.home { max-width: 1240px; margin: 0 auto; padding: 0 28px 60px; }
-.home-hero { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); gap: 32px; align-items: center; min-height: 88vh; }
-.home-copy h1 { font-size: 62px; letter-spacing: -.03em; margin: 0 0 6px; font-weight: 800; font-style: italic; }
-.home-tag { margin: 0 0 22px; font-size: 15px; letter-spacing: .16em; text-transform: uppercase; color: #6b6486; }
-.home-lede { margin: 0 0 28px; font-size: 16px; line-height: 1.75; color: #b8b3cc; max-width: 46ch; }
-.home-cta { display: flex; gap: 10px; flex-wrap: wrap; }
-.home-note { margin: 18px 0 0; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: #4f4a68; }
-.home-device { height: min(70vh, 620px); }
+/* ── the horizontal shell ─────────────────────────────────────────────────
+ * You scroll DOWN and the world moves LEFT, on every page but `/legal`.
+ *
+ * One tall rail whose only child is a sticky, viewport-sized window. Inside it a
+ * track of full-viewport panels is translated on X by `--evo`. Input stays entirely
+ * conventional — wheel, trackpad, keyboard, touch, the scrollbar and `#anchor` links
+ * all behave exactly as they do on any page — while what you SEE is a side-scroller.
+ * Remapping the wheel to the X axis would have bought the same picture and cost all
+ * of that.
+ *
+ * `--hs-n` is the panel count, set per page. The rail's height and the track's width
+ * are both derived from it, so the scroll length and the travel cannot disagree.
+ */
+:root { --evo: 0; }
 
-.home-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(232px, 1fr)); gap: 18px; margin: 20px 0 48px; }
-.home-grid article { padding: 20px 22px; border-radius: 14px; border: 1px solid #24203a; background: linear-gradient(#161326, #0e0c18); }
-.home-grid h3 { margin: 0 0 8px; font-size: 14px; letter-spacing: .02em; }
-.home-grid p { margin: 0; font-size: 13.5px; line-height: 1.7; color: #8f8aa8; }
-.home-grid strong { color: #e8eaed; }
+.hs { --hs-n: 6;
+      --ink: color-mix(in srgb, #d8d4e4, #fff2dc calc(var(--evo) * 70%));
+      --dim: color-mix(in srgb, #6b6486, #c9a97a calc(var(--evo) * 55%));
+      position: relative; isolation: isolate; }
 
-.home-foot { display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap; padding-top: 22px; border-top: 1px solid #1d1a2e; font-size: 12px; color: #4f4a68; }
-.home-foot nav { display: flex; gap: 18px; }
-.home-foot nav a:hover { color: #e8eaed; }
+.hs-rail { height: calc(var(--hs-n) * 100vh); }
+
+/* `overflow: hidden` here is what clips the track to one viewport. A panel must
+ * therefore never be taller than it — a panel that overflows is unreachable, with no
+ * scrollbar to recover it. */
+.hs-vp {
+  position: sticky; top: 0; height: 100vh; overflow: hidden;
+  isolation: isolate;
+}
+
+.hs-scene {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  z-index: -1; pointer-events: none; display: block;
+}
+
+.hs-track {
+  position: absolute; top: 0; left: 0; height: 100%;
+  width: calc(var(--hs-n) * 100vw);
+  display: flex;
+  transform: translate3d(calc(var(--evo) * (100vw - var(--hs-n) * 100vw)), 0, 0);
+  will-change: transform;
+}
+
+.hs-panel {
+  flex: 0 0 100vw; width: 100vw; height: 100%;
+  position: relative; display: flex; flex-direction: column; justify-content: center;
+  gap: 14px; padding: 0 clamp(24px, 6vw, 92px);
+}
+
+/* How far along the world you are. */
+.hs-prog {
+  position: absolute; left: 0; bottom: 0; height: 2px; z-index: 4;
+  width: calc(var(--evo) * 100%);
+  background: linear-gradient(90deg, #7a6bd0, #f0a030);
+  opacity: .8; pointer-events: none;
+}
+
+/* ── hero: the only thing on a black page ── */
+.hs-panel.lp-hero { align-items: center; justify-content: center; text-align: center; }
+.lp-wordmark {
+  margin: 0; font-family: var(--f-title), ui-sans-serif, sans-serif;
+  font-size: clamp(56px, 13vw, 152px); font-weight: 400; letter-spacing: .01em; line-height: 1;
+  color: color-mix(in srgb, #e8eaed, #fff5e2 calc(var(--evo) * 100%));
+}
+.lp-tag {
+  margin: 18px 0 0; font-size: clamp(11px, 1.6vw, 15px);
+  letter-spacing: .28em; text-transform: uppercase; color: var(--dim);
+}
+.lp-scrollcue {
+  position: absolute; bottom: 34px; left: 50%; transform: translateX(-50%);
+  margin: 0; font-size: 10px; letter-spacing: .3em; text-transform: uppercase;
+  color: #4f4a68; animation: lp-bob 2.4s ease-in-out infinite;
+  /* It points the way the WORLD goes, not the way the wheel goes. */
+  display: flex; align-items: center; gap: 10px;
+}
+.lp-scrollcue::after { content: ""; width: 34px; height: 1px; background: linear-gradient(90deg, #4f4a68, transparent); }
+@keyframes lp-bob { 0%, 100% { transform: translate(-50%, 0); opacity: .85 } 50% { transform: translate(calc(-50% + 5px), 0); opacity: .45 } }
+
+/* ── panel furniture ── */
+.lp-num {
+  font-family: var(--f-pix-ui), ui-monospace, monospace;
+  font-size: 11px; letter-spacing: .22em; text-transform: uppercase;
+  color: color-mix(in srgb, #b0a8cc, #ffcf80 calc(var(--evo) * 100%));
+}
+.lp-lede { margin: 0; font-size: clamp(13.5px, 1.4vw, 16px); line-height: 1.72; color: var(--ink); }
+.lp-lede, .lp-num, .lp-facts dd { text-shadow: 0 1px 9px rgba(4, 3, 9, calc(var(--evo) * .9)); }
+.lp-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 14px 24px; margin: 10px 0 0; max-width: 660px; }
+.lp-facts dt { font-family: var(--f-pix-ui), monospace; font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: #a49cc0; margin-bottom: 5px; text-shadow: 0 1px 8px rgba(4,3,9,.95); }
+.lp-facts dd { margin: 0; font-size: 16px; color: #e8eaed; }
+
+/* ── pixel panels ──────────────────────────────────────────────────────────
+ * FLAT COLOUR, HARD EDGES, NO GRADIENT.
+ *
+ * The copy used to sit on a soft radial darkening drawn into the canvas. It read as
+ * a shadow laid over the picture rather than as an object in it, and it pulled the
+ * contrast of the whole page down with it. A plate is a plate: one fill, one border,
+ * one hard offset shadow — the same vocabulary the device's own UI uses.
+ *
+ * The canvas draws the posts underneath (see `legs` in world.ts), so the plate is
+ * mounted in the level while the plate itself stays a single DOM box that cannot
+ * drift out of register with its own contents.
+ */
+.lp-plate {
+  background: #100e1c;
+  border: 3px solid #342f52;
+  box-shadow: 0 0 0 3px #07060e, 7px 7px 0 rgba(0, 0, 0, .5);
+}
+
+.lp-copy {
+  position: relative; display: flex; flex-direction: column; gap: 13px;
+  max-width: 54ch; padding: 22px 26px 24px;
+  background: #100e1c;
+  border: 3px solid #342f52;
+  box-shadow: 0 0 0 3px #07060e, 7px 7px 0 rgba(0, 0, 0, .5);
+}
+/* Corner studs: four blocks, which is what stops a flat rectangle reading as a
+ * browser div and starts it reading as a panel that was built. */
+.lp-copy::before, .lp-copy::after {
+  content: ""; position: absolute; width: 7px; height: 7px; background: #5b5288;
+  pointer-events: none;
+}
+.lp-copy::before { top: 5px; left: 5px; box-shadow: calc(100% + 5px) 0 0 #5b5288; }
+.lp-copy::after { bottom: 5px; left: 5px; box-shadow: calc(100% + 5px) 0 0 #5b5288; }
+
+/* ── the font morph ──
+ * Two faces per character, crossfaded. ONLY ONE of them is a text node: the pixel
+ * face is a `::after` carrying `content: attr(data-ch)`, which is drawn but is not
+ * text, so `textContent`, copy-paste, search and any scraper see each letter once.
+ * The first version stacked two real spans and every reader got "OOnnee ggeessttuurree".
+ */
+.lp-morph { margin: 0; }
+.lp-word { display: inline-block; white-space: nowrap; }
+.lp-ch { display: inline-block; position: relative; vertical-align: baseline; }
+.lp-ch-sans { opacity: calc(1 - clamp(0, (var(--evo) - var(--a)) / (var(--b) - var(--a)), 1)); }
+.lp-ch::after {
+  content: attr(data-ch);
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  opacity: clamp(0, (var(--evo) - var(--a)) / (var(--b) - var(--a)), 1);
+  font-family: var(--f-pix), ui-monospace, monospace;
+  font-size: .74em; letter-spacing: -.01em; font-style: normal; font-weight: 400;
+}
+.lp-h {
+  font-size: clamp(26px, 4vw, 48px); line-height: 1.16; letter-spacing: -.025em;
+  font-weight: 700; color: #f2f0f7; align-items: end;
+  text-shadow: 0 2px 14px rgba(4, 3, 9, calc(var(--evo) * .95));
+}
+.lp-h-big { font-size: clamp(32px, 5.4vw, 66px); }
+
+/* ── mode panels: copy beside the mode actually running ── */
+.hs-panel.lp-mode { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .92fr); align-items: center; gap: 22px 52px; }
+.lp-flip { grid-template-columns: minmax(0, .92fr) minmax(0, 1fr); }
+.lp-flip .lp-copy { order: 2; }
+/* ── the display, as a billboard ──
+ * The frame, the screen and the caption plate are one box with one border. The old
+ * version drew a slab bezel on the canvas behind a separately-styled canvas element,
+ * and the two were never quite in register — a frame that is a different element
+ * from the thing it frames will always drift. */
+.lp-play {
+  margin: 0; display: inline-flex; flex-direction: column; align-self: center;
+  padding: 9px 9px 0;
+  background: #171326;
+  border: 4px solid #3d3660;
+  box-shadow: 0 0 0 4px #07060e, 8px 8px 0 rgba(0, 0, 0, .55);
+}
+.lp-play canvas {
+  display: block; aspect-ratio: 900 / 780;
+  height: min(52vh, 430px); width: auto; max-width: 100%;
+  border: 2px solid #07060e;
+  image-rendering: pixelated;
+}
+/* The billboard's name plate, across its foot. */
+.lp-play figcaption {
+  margin: 9px -9px 0; padding: 7px 10px;
+  background: #3d3660; color: #efe9ff;
+  font-family: var(--f-pix-ui), monospace; font-size: 10px; letter-spacing: .18em;
+  text-transform: uppercase; text-align: center;
+}
+
+/* ── the last panel: the device standing on the ground ── */
+.hs-panel.lp-last { --lp-ground: 53%; display: block; padding: 0; }
+.hs-panel.lp-last > * { max-width: none; }
+.lp-outro {
+  position: absolute; top: 22vh; left: 7vw; z-index: 2;
+  width: min(500px, 40vw); display: grid; gap: 12px; justify-items: start;
+}
+.lp-outro .lp-lede { max-width: 34ch; }
+.lp-stage {
+  position: absolute; right: 1vw; bottom: calc(100% - var(--lp-ground));
+  width: min(720px, 50vw); height: 47vh;
+}
+.lp-cta { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
+.lp-btn {
+  font-family: var(--f-pix-ui), ui-sans-serif, sans-serif;
+  display: inline-block; padding: 12px 22px; font-size: 14px; letter-spacing: .06em;
+  border: 2px solid rgba(255,255,255,.22); color: #e8eaed;
+  box-shadow: 3px 3px 0 rgba(0,0,0,.45);
+  transition: transform .1s steps(2), border-color .16s, background .16s;
+}
+.lp-btn:hover { border-color: rgba(255,255,255,.5); background: rgba(255,255,255,.06); }
+.lp-btn:active { transform: translate(3px, 3px); box-shadow: none; }
+.lp-btn-go { border-color: #f0a030; background: linear-gradient(#ffd76a, #f0a030); color: #1a1200; box-shadow: 3px 3px 0 rgba(120,70,0,.6); }
+.lp-btn-go:hover { background: linear-gradient(#ffe08a, #ffb040); border-color: #ffd76a; }
+
+/* Fixed to the viewport window, not to a panel: it is chrome over the world. */
+.lp-foot {
+  position: absolute; bottom: 0; left: 0; right: 0; z-index: 3;
+  display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap;
+  padding: 12px clamp(16px, 4vw, 32px) calc(12px + env(safe-area-inset-bottom));
+  background: linear-gradient(transparent, rgba(0,0,0,.62) 62%);
+  font-family: var(--f-pix-ui), monospace; font-size: 11px; letter-spacing: .08em;
+  color: #cfc6df; text-shadow: 0 1px 6px #000;
+  opacity: clamp(0, (var(--evo) - .76) / .12, 1); pointer-events: none;
+}
+.lp-foot nav { display: flex; gap: 16px; flex-wrap: wrap; pointer-events: auto; }
+.lp-foot nav a:hover { color: #fff; }
+
+/* A horizontal reader: how far along the world you are. */
+
+@media (max-width: 860px) {
+  .hs-panel { padding: 0 20px; gap: 11px; }
+  /* Copy above, the mode running below it: a 100vw panel has no room for columns. */
+  .hs-panel.lp-mode { grid-template-columns: 1fr; align-content: center; gap: 16px; }
+  .lp-flip .lp-copy { order: 0; }
+  .lp-play canvas { height: min(38vh, 300px); }
+  .lp-h { font-size: clamp(22px, 7vw, 34px); }
+  .lp-lede { font-size: 13px; line-height: 1.6; }
+  .lp-facts { grid-template-columns: repeat(2, 1fr); gap: 10px 16px; }
+  .lp-stage { height: 28vh; width: 84vw; right: auto; left: 8vw; }
+  .lp-outro { top: 5vh; left: 6vw; width: 84vw; gap: 9px; }
+  .lp-foot { font-size: 10px; gap: 6px; padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
+  .lp-foot nav { gap: 11px; }
+}
+
+/* THE PANEL CLIPS. `.hs-vp` is `overflow: hidden`, so copy that does not fit its
+ * one viewport is unreachable — there is no scrollbar to recover it, and a nested
+ * scroller here would fight the page scroll that drives the world. So on a short
+ * viewport the content gets smaller rather than taller. */
+@media (max-height: 620px) {
+  .hs-panel { gap: 8px; }
+  .lp-h { font-size: clamp(19px, 3.4vh, 28px); }
+  .lp-lede { font-size: 12px; line-height: 1.5; }
+  .lp-play canvas { height: min(34vh, 220px); }
+  .lp-play figcaption { display: none; }
+  .lp-facts { gap: 6px 14px; margin: 4px 0 0; }
+  .lp-facts dd { font-size: 13px; }
+  .lp-stage { height: 22vh; }
+  .lp-outro { top: 3vh; gap: 7px; }
+  .lp-wordmark { font-size: clamp(40px, 11vh, 96px); }
+}
+
+/* A world that slides is motion. Honour the opt-out: the panels still travel,
+ * because that IS the navigation, but nothing eases, drifts or bobs. */
+@media (prefers-reduced-motion: reduce) {
+  .lp-scrollcue { animation: none; }
+  .lp-btn { transition: none; }
+  .hs-track { will-change: auto; }
+}
 
 /* ── play ─────────────────────────────────────────────────────────────────── */
-.play { position: fixed; inset: 0; overflow: hidden; }
+.play { position: fixed; inset: 0; overflow: hidden; --rail: 78px; }
 .play .dev3d { position: absolute; inset: 0; }
 .play-hud { position: absolute; top: 18px; left: 20px; display: flex; gap: 16px; z-index: 2; }
 .play-link { font-size: 11.5px; letter-spacing: .1em; text-transform: uppercase; color: #6b6486; }
@@ -128,39 +372,88 @@ a { color: inherit; text-decoration: none; }
 .demo-nav .btn { padding: 7px 14px; font-size: 12px; }
 
 /* ── pitch ────────────────────────────────────────────────────────────────── */
-.pitch { max-width: 900px; margin: 0 auto; padding: 0 28px 80px; }
-.pitch-hero { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 28px; align-items: center; min-height: 74vh; }
-.pitch-hero h1 { font-size: 56px; margin: 4px 0 6px; font-weight: 800; font-style: italic; letter-spacing: -.03em; }
+/* ── pitch (/pitch) ────────────────────────────────────────────────────────
+ * The deck, restyled to sit in the same world as the landing page: pixel type on
+ * every label and slide number, prose left in a readable sans face. It does NOT
+ * get the scroll-built canvas — that is the landing page's one trick, and a second
+ * page doing it makes neither feel deliberate.
+ */
+.pitch { max-width: 980px; margin: 0 auto; padding: 0 28px 132px; }
+.pitch-hero {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 28px; align-items: center; min-height: 74vh;
+}
+.pitch-hero h1 {
+  font-family: var(--f-title), ui-sans-serif, sans-serif;
+  font-size: clamp(46px, 7vw, 68px); margin: 6px 0 8px;
+  font-weight: 400; letter-spacing: .01em; line-height: 1;
+}
 .pitch-device { height: min(52vh, 430px); }
-.pitch-kicker { margin: 0; font-size: 10.5px; letter-spacing: .2em; text-transform: uppercase; color: #f0a030; }
-.pitch-tag { margin: 0; font-size: 14px; letter-spacing: .14em; text-transform: uppercase; color: #6b6486; }
-.pitch-slide { padding: 46px 0; border-top: 1px solid #1d1a2e; }
-.pitch-slide h2 { font-size: 30px; line-height: 1.25; letter-spacing: -.02em; margin: 10px 0 18px; max-width: 22ch; }
+.pitch-kicker {
+  margin: 0; font-family: var(--f-pix-ui), monospace;
+  font-size: 11px; letter-spacing: .2em; text-transform: uppercase; color: #f0a030;
+}
+.pitch-tag {
+  margin: 0; font-family: var(--f-pix-ui), monospace;
+  font-size: 14px; letter-spacing: .14em; text-transform: uppercase; color: #6b6486;
+}
+
+/* Number rail on the left, copy on the right. The rail collapses on a phone
+ * rather than stealing a third of a 360px line. */
+.pitch-slide {
+  display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 0 26px;
+  padding: 46px 0; border-top: 1px solid #1d1a2e;
+}
+.pitch-n {
+  font-family: var(--f-pix), ui-monospace, monospace; font-size: 22px;
+  color: #322c4c; line-height: 1; padding-top: 4px; user-select: none;
+}
+.pitch-slide h2 {
+  font-size: clamp(24px, 3.2vw, 31px); line-height: 1.25; letter-spacing: -.02em;
+  margin: 10px 0 18px; max-width: 22ch;
+}
 .pitch-slide p { font-size: 15.5px; line-height: 1.78; color: #a8a3c0; margin: 0 0 16px; max-width: 66ch; }
-.pitch-specs dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; margin: 22px 0 0; }
-.pitch-specs dt { font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: #6b6486; margin-bottom: 4px; }
+.pitch-slide p:last-child { margin-bottom: 0; }
+
+.pitch-specs dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px 22px; margin: 22px 0 0; }
+.pitch-specs dt {
+  font-family: var(--f-pix-ui), monospace; font-size: 10px; letter-spacing: .16em;
+  text-transform: uppercase; color: #6b6486; margin-bottom: 5px;
+}
 .pitch-specs dd { margin: 0; font-size: 14px; color: #e8eaed; }
-.pitch-foot { display: flex; gap: 10px; padding-top: 34px; border-top: 1px solid #1d1a2e; }
+.pitch-foot { display: flex; gap: 10px; flex-wrap: wrap; padding-top: 34px; border-top: 1px solid #1d1a2e; }
+
+@media (max-width: 720px) {
+  .pitch { padding: 0 20px 120px; }
+  .pitch-hero { grid-template-columns: 1fr; min-height: auto; padding-top: 48px; gap: 20px; }
+  .pitch-device { height: 38vh; order: -1; }
+  .pitch-slide { grid-template-columns: 1fr; gap: 8px; padding: 34px 0; }
+  .pitch-n { font-size: 16px; padding: 0; }
+}
 
 /* ── leaderboard ──────────────────────────────────────────────────────────── */
-.page { max-width: 860px; margin: 0 auto; padding: 60px 28px 80px; }
-.page-head h1 { font-size: 38px; margin: 12px 0 6px; letter-spacing: -.02em; }
+.page { max-width: 900px; margin: 0 auto; padding: 68px 28px 132px; }
+.page-head h1 {
+  font-family: var(--f-title), ui-sans-serif, sans-serif;
+  font-weight: 400; font-size: clamp(36px, 6vw, 54px); margin: 12px 0 8px; letter-spacing: .01em;
+  line-height: 1;
+}
 .page-head p { margin: 0 0 26px; color: #8f8aa8; font-size: 14px; }
 .page-back { font-size: 11.5px; letter-spacing: .12em; text-transform: uppercase; color: #6b6486; }
 .page-back:hover { color: #e8eaed; }
-.board { border: 1px solid #24203a; border-radius: 13px; overflow: hidden; }
-.board-row { display: grid; grid-template-columns: 46px 1fr 78px 68px 96px 100px; gap: 10px; padding: 13px 16px; font-size: 13.5px; border-top: 1px solid #1d1a2e; }
+.board { background: #100e1c; border: 3px solid #342f52; box-shadow: 0 0 0 3px #07060e, 6px 6px 0 rgba(0,0,0,.45); overflow: hidden; }
+.board-row { display: grid; grid-template-columns: 46px 1fr 78px 78px 100px; gap: 10px; padding: 13px 16px; font-size: 13.5px; border-top: 1px solid #1d1a2e; }
 .board-row:first-child { border-top: none; }
-.board-head { font-size: 9.5px; letter-spacing: .16em; text-transform: uppercase; color: #6b6486; background: rgba(255,255,255,.02); }
+.board-head { font-family: var(--f-pix-ui), monospace; font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: #b3aacf; background: #1d1932; }
 .board-rank { color: #f0a030; font-weight: 700; }
 .page-note { margin-top: 20px; font-size: 12.5px; line-height: 1.7; color: #6b6486; }
 .page-note code { color: #a8a3c0; }
 
 @media (max-width: 900px) {
-  .home-hero, .pitch-hero { grid-template-columns: 1fr; }
-  .home-device, .pitch-device { height: 46vh; }
+  .pitch-hero { grid-template-columns: 1fr; }
+  .pitch-device { height: 46vh; }
   .board-row { grid-template-columns: 34px 1fr 60px 78px; }
-  .board-row > :nth-child(5), .board-row > :nth-child(6) { display: none; }
+  .board-row > :nth-child(5) { display: none; }
 }
 
 /* Share the current frame of the device, and silence it. */
@@ -232,10 +525,6 @@ a { color: inherit; text-decoration: none; }
   .play-status { left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); max-width: none; }
   .play-tx { left: 12px; bottom: calc(58px + env(safe-area-inset-bottom)); font-size: 10.5px; }
 
-  .home { padding: 0 18px 44px; }
-  .home-copy h1 { font-size: 42px; }
-  .home-lede { font-size: 15px; }
-  .home-hero { min-height: auto; padding-top: 40px; gap: 20px; }
   .pitch { padding: 0 18px 60px; }
   .pitch-hero h1 { font-size: 40px; }
   .pitch-slide h2 { font-size: 24px; }
@@ -243,18 +532,92 @@ a { color: inherit; text-decoration: none; }
   .demo-tip { width: min(300px, 86vw); }
 }
 
-/* A phone held upright gives the landscape device very little height. */
+/* ── mobile: LANDSCAPE IS THE ONLY PLAYABLE ORIENTATION ────────────────────
+   The device is a landscape object. Fitted into a portrait phone it came out
+   roughly a third of the screen wide and every control was a few pixels across —
+   visible, and not usable. A hint at the bottom was not enough, because the screen
+   behind it still looked like the app working. So portrait is BLOCKED outright. */
 .play-rotate {
-  position: absolute; left: 50%; bottom: calc(14px + env(safe-area-inset-bottom));
-  transform: translateX(-50%); z-index: 3; display: none;
-  padding: 7px 13px; border-radius: 999px; white-space: nowrap;
-  background: rgba(14,12,24,.86); border: 1px solid #24203a; backdrop-filter: blur(8px);
-  font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: #8f8aa8;
+  position: fixed; inset: 0; z-index: 40; display: none;
+  flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+  padding: 32px; text-align: center;
+  background: #08070e;
 }
-@media (max-width: 760px) and (orientation: portrait) {
-  .play-rotate { display: block; }
+.play-rotate-icon {
+  width: 74px; height: 46px; border-radius: 8px;
+  border: 2px solid #6b6486;
+  animation: play-rotate-turn 2.4s ease-in-out infinite;
+}
+@keyframes play-rotate-turn {
+  0%, 32% { transform: rotate(90deg) scale(.86); }
+  58%, 100% { transform: rotate(0deg) scale(1); }
+}
+.play-rotate strong { font-size: 15px; letter-spacing: .04em; color: #e8eaed; font-weight: 600; }
+.play-rotate span { font-size: 12.5px; line-height: 1.7; color: #6b6486; max-width: 30ch; }
+
+@media (orientation: portrait) and (max-width: 900px) {
+  .play-rotate { display: flex; }
   .play-keys { display: none; }
 }
+
+/* ── mobile landscape: the console IS the screen ───────────────────────────
+   This is the primary way the game gets played, so the device gets every pixel to
+   the right of a narrow rail and nothing else. No padding top, bottom or right: the
+   console is a fixed-ratio object and any margin it cannot use comes straight off
+   its size, which is what made it unplayably small in the first place.
+
+   The rail carries what is not the game, stacked. Down the left rather than across
+   the top because height is the axis a landscape phone has least of, and the console
+   scales on whichever axis binds first. */
+@media (orientation: landscape) and (max-height: 560px) {
+  .play {
+    /* The safe area belongs to the RAIL, not to the console. */
+    padding: 0;
+    --rail: calc(70px + env(safe-area-inset-left));
+  }
+  .play .dev3d { left: var(--rail); right: 0; top: 0; bottom: 0; }
+
+  .play-hud,
+  .play-actions {
+    left: calc(8px + env(safe-area-inset-left));
+    right: auto;
+    width: 58px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .play-hud { top: calc(8px + env(safe-area-inset-top)); }
+  .play-actions { top: calc(64px + env(safe-area-inset-top)); }
+
+  .play-link {
+    font-size: 9px; line-height: 1.3; letter-spacing: .06em;
+    max-width: 58px; white-space: normal;
+  }
+  /* Square, so two round buttons stack without the rail growing. */
+  .play-share, .play-mute { padding: 8px; width: 34px; height: 34px; justify-content: center; }
+  .play-share span { display: none; }
+  .play-share svg, .play-mute svg { width: 16px; height: 16px; }
+
+  .play-bal {
+    top: auto; right: auto;
+    left: calc(8px + env(safe-area-inset-left));
+    bottom: calc(52px + env(safe-area-inset-bottom));
+    font-size: 9px;
+  }
+  .play-status, .play-tx {
+    left: calc(8px + env(safe-area-inset-left));
+    right: auto;
+    width: 58px; max-width: 58px;
+    font-size: 8.5px; line-height: 1.35;
+    padding: 5px 6px; word-break: break-word;
+  }
+  .play-status { bottom: calc(8px + env(safe-area-inset-bottom)); }
+  /* The explorer link needs a hash to be useful and the rail is 58px wide, so it
+     wrapped into an unreadable stack on top of the LIVE badge. The transaction is
+     still one tap away from the standings; here it only costs legibility. */
+  .play-tx, .play-install, .play-ios-hint { display: none; }
+}
+
 
 /* Install-as-app, and the iOS instruction that replaces it where there is no prompt. */
 .play-install { padding: 8px 13px 8px 10px; }
@@ -270,3 +633,286 @@ a { color: inherit; text-decoration: none; }
   .play-install { padding: 9px 10px; }
   .play-ios-hint { top: calc(46px + env(safe-area-inset-top)); right: 12px; }
 }
+
+/* ── how it works (/how-it-works) ──────────────────────────────────────────── */
+.guide { margin: 0 0 34px; }
+.guide h2 { font-family: var(--f-pix), ui-monospace, monospace; font-size: 15px; letter-spacing: .06em; margin: 0 0 4px; color: #f0a030; }
+.guide-sub { margin: 0 0 14px; font-size: 13px; color: #6b6486; letter-spacing: .04em; }
+.guide-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; background: #342f52; border: 3px solid #342f52; box-shadow: 0 0 0 3px #07060e, 6px 6px 0 rgba(0,0,0,.45); overflow: hidden; counter-reset: step; }
+.guide-steps li { display: grid; grid-template-columns: 26px 1fr; gap: 4px 12px; padding: 14px 16px; background: #100e1c; counter-increment: step; }
+.guide-steps li::before { content: counter(step); grid-row: 1 / 3; font-family: var(--f-pix-ui), monospace; font-size: 12px; color: #4f4a68; padding-top: 2px; }
+.guide-steps b { font-size: 13.5px; color: #e8eaed; }
+.guide-steps span { font-size: 13px; line-height: 1.65; color: #8f8aa8; }
+.guide-foot { margin: 12px 0 0; font-size: 12.5px; line-height: 1.65; color: #6b6486; }
+
+/* ── site navigation ──────────────────────────────────────────────────────
+ * A pixel plate at the bottom centre, on every page but `/play`. Same flat fill,
+ * hard border and offset shadow as every other plate on the site.
+ */
+.pnav {
+  position: fixed; left: 50%; transform: translateX(-50%); bottom: 16px; z-index: 40;
+  display: flex; gap: 2px; padding: 5px;
+  background: #100e1c; border: 3px solid #342f52;
+  box-shadow: 0 0 0 3px #07060e, 5px 5px 0 rgba(0, 0, 0, .5);
+  font-family: var(--f-pix-ui), ui-monospace, monospace;
+}
+.pnav-a {
+  padding: 8px 13px; font-size: 11px; letter-spacing: .1em; color: #b3aacf;
+  border: 2px solid transparent; white-space: nowrap;
+  transition: color .12s, background .12s, border-color .12s;
+}
+.pnav-a:hover { color: #fff; background: #1d1932; border-color: #4a4272; }
+.pnav-a.on { color: #1a1200; background: linear-gradient(#ffd76a, #f0a030); border-color: #ffd76a; }
+
+@media (max-width: 860px) {
+  .pnav { bottom: calc(8px + env(safe-area-inset-bottom)); gap: 1px; padding: 4px; }
+  .pnav-a { padding: 7px 8px; font-size: 10px; letter-spacing: .04em; }
+}
+@media (max-width: 520px) {
+  .pnav { max-width: calc(100vw - 16px); overflow-x: auto; }
+}
+
+/* ── long-form pages (/legal, /how-it-works, /pitch) ───────────────────────
+ * Same vocabulary as the landing page: pixel type on every label and heading, flat
+ * plates for the content, and room at the bottom for the nav.
+ */
+.doc { max-width: 940px; margin: 0 auto; padding: 76px 26px 132px; }
+.doc-head { margin: 0 0 34px; }
+.doc-kicker {
+  margin: 0 0 10px; font-family: var(--f-pix-ui), monospace; font-size: 11px;
+  letter-spacing: .2em; text-transform: uppercase; color: #f0a030;
+}
+.doc h1 {
+  font-family: var(--f-title), ui-sans-serif, sans-serif; font-weight: 400;
+  font-size: clamp(38px, 6vw, 62px); letter-spacing: .01em; margin: 0 0 8px; line-height: 1;
+}
+.doc-sub { margin: 0; font-size: 15px; line-height: 1.7; color: #a8a3c0; max-width: 62ch; }
+.doc-sec {
+  margin: 0 0 20px; padding: 24px 26px;
+  background: #100e1c; border: 3px solid #342f52;
+  box-shadow: 0 0 0 3px #07060e, 6px 6px 0 rgba(0, 0, 0, .45);
+}
+.doc-sec h2 {
+  font-family: var(--f-pix), ui-monospace, monospace; font-weight: 400;
+  font-size: clamp(15px, 2vw, 19px); letter-spacing: .02em; margin: 0 0 14px; color: #f2f0f7;
+}
+.doc-sec h3 {
+  font-family: var(--f-pix-ui), monospace; font-size: 12px; letter-spacing: .14em;
+  text-transform: uppercase; color: #ffc266; margin: 22px 0 8px;
+}
+.doc-sec p, .doc-sec li { font-size: 14.5px; line-height: 1.75; color: #b8b3cc; margin: 0 0 12px; }
+.doc-sec ul { margin: 0 0 12px; padding-left: 20px; }
+.doc-sec li { margin: 0 0 7px; }
+.doc-sec p:last-child, .doc-sec ul:last-child { margin-bottom: 0; }
+.doc-sec strong { color: #e8eaed; }
+.doc-sec code {
+  font-family: ui-monospace, monospace; font-size: 12.5px;
+  background: #07060e; padding: 2px 5px; color: #9fe8d8;
+}
+.doc-note {
+  margin: 26px 0 0; padding: 16px 18px; border-left: 3px solid #f0a030;
+  background: rgba(240, 160, 48, .06); font-size: 13.5px; line-height: 1.7; color: #cfc6df;
+}
+
+/* ── the deck (/pitch) ────────────────────────────────────────────────────
+ * A FIXED stage, not a scroll. `--deck` is the eased slide position written every
+ * frame by `components/Deck.tsx`; the track and the canvas both read it, so the
+ * words and the scene behind them can never be a frame out of step.
+ *
+ * The page itself does not scroll at all — the deck is `position: fixed`, so there
+ * is nothing for a stray wheel event to move.
+ */
+.deck { position: fixed; inset: 0; overflow: hidden; --deck: 0; --deck-n: 7; }
+.deck-scene { position: absolute; inset: 0; width: 100%; height: 100%; display: block; z-index: 0; }
+.deck-track {
+  position: absolute; top: 0; left: 0; height: 100%;
+  width: calc(var(--deck-n) * 100vw);
+  display: flex; z-index: 1;
+  transform: translate3d(calc(var(--deck) * -100vw), 0, 0);
+  will-change: transform;
+}
+.deck-slide {
+  flex: 0 0 100vw; width: 100vw; height: 100%;
+  position: relative; display: flex; flex-direction: column; justify-content: center;
+  padding: 0 clamp(24px, 7vw, 110px);
+}
+.deck-slide .lp-copy { max-width: 60ch; }
+.deck-first .lp-copy { align-items: flex-start; }
+.deck-mark {
+  font-family: var(--f-title), ui-sans-serif, sans-serif; font-weight: 400;
+  font-size: clamp(46px, 8vw, 92px); letter-spacing: .01em; line-height: 1; margin: 4px 0 2px;
+}
+.deck-cue {
+  margin: 12px 0 0; font-family: var(--f-pix-ui), monospace; font-size: 10px;
+  letter-spacing: .2em; text-transform: uppercase; color: #8d85ab;
+}
+.deck-device {
+  position: absolute; right: 4vw; top: 50%; transform: translateY(-50%);
+  width: min(460px, 38vw); height: 52vh; pointer-events: none;
+}
+.deck-slide h2 {
+  font-family: var(--f-pix), ui-monospace, monospace; font-weight: 400;
+  font-size: clamp(18px, 2.6vw, 30px); line-height: 1.3; letter-spacing: .01em;
+  margin: 4px 0 6px; color: #f2f0f7;
+}
+.deck-slide p { font-size: clamp(13px, 1.35vw, 15.5px); line-height: 1.7; color: #d8d4e4; margin: 0; }
+.deck-slide .pitch-kicker { color: #ffc266; }
+.deck-n { font-family: var(--f-pix), ui-monospace, monospace; color: #6b6486; margin-right: 12px; letter-spacing: 0; }
+.deck-specs { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px 20px; margin: 8px 0 0; }
+.deck-specs dt {
+  font-family: var(--f-pix-ui), monospace; font-size: 9.5px; letter-spacing: .16em;
+  text-transform: uppercase; color: #8d85ab; margin-bottom: 3px;
+}
+.deck-specs dd { margin: 0; font-size: 13px; color: #e8eaed; }
+
+/* Slide controls, above the site nav. */
+.deck-hud {
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: 74px; z-index: 20;
+  display: flex; align-items: center; gap: 8px; padding: 5px 7px;
+  background: #100e1c; border: 3px solid #342f52;
+  box-shadow: 0 0 0 3px #07060e, 5px 5px 0 rgba(0, 0, 0, .5);
+}
+.deck-arrow {
+  background: none; border: 2px solid transparent; color: #b3aacf; cursor: pointer;
+  font-size: 17px; line-height: 1; padding: 4px 9px;
+}
+.deck-arrow:hover:not(:disabled) { color: #fff; border-color: #4a4272; }
+.deck-arrow:disabled { color: #3a3458; cursor: default; }
+.deck-dots { display: flex; gap: 6px; }
+.deck-dot {
+  width: 11px; height: 11px; padding: 0; cursor: pointer;
+  background: #2b2647; border: 2px solid #07060e;
+}
+.deck-dot:hover { background: #4a4272; }
+.deck-dot.on { background: #f0a030; }
+.deck-count {
+  position: absolute; left: clamp(24px, 7vw, 110px); bottom: 26px; z-index: 20; margin: 0;
+  font-family: var(--f-pix), ui-monospace, monospace; font-size: 11px; color: #8d85ab;
+  text-shadow: 0 1px 6px #000;
+}
+
+@media (max-width: 860px) {
+  .deck-device { display: none; }
+  .deck-slide { padding: 0 20px; }
+  .deck-slide .lp-copy { max-width: none; }
+  .deck-hud { bottom: 64px; }
+  .deck-count { display: none; }
+}
+
+/* The stage does not move for a visitor who asked for less motion — the slide
+ * simply changes. `Deck.tsx` snaps the position rather than easing it. */
+@media (prefers-reduced-motion: reduce) {
+  .deck-track { will-change: auto; }
+}
+
+/* ── horizontal document pages (/how-it-works, /board) ── */
+.doc-h .lp-copy { max-width: 68ch; }
+.doc-h .guide h2 {
+  font-family: var(--f-pix), ui-monospace, monospace; font-weight: 400;
+  font-size: clamp(15px, 2vw, 20px); margin: 0 0 3px; color: #ffc266; letter-spacing: .02em;
+}
+.doc-h .guide-sub { margin: 0 0 12px; font-size: 12px; color: var(--dim); letter-spacing: .04em; }
+.doc-h .guide-foot { margin: 12px 0 0; font-size: 12px; color: var(--dim); }
+.doc-h .guide-steps { max-height: 52vh; overflow: hidden; }
+.doc-h .guide-steps li { padding: 11px 14px; }
+.doc-h .guide-steps li b { font-size: 13px; color: #e8eaed; }
+.doc-h .guide-steps li span { font-size: 12.5px; line-height: 1.6; color: #b8b3cc; }
+.doc-h .board-copy { max-width: min(820px, 88vw); }
+.doc-h .board { box-shadow: none; border-width: 2px; }
+.doc-h .board-row { padding: 10px 16px; font-size: 13px; grid-template-columns: 40px 1fr 70px 70px 92px; }
+
+@media (max-width: 860px) {
+  .deck-device { display: none; }
+  .deck-slide .lp-copy, .doc-h .lp-copy { max-width: none; }
+}
+
+/* ── /play: the device, standing somewhere ────────────────────────────────
+ * The surface used to be a flat colour behind a floating object. It now carries
+ * the same scene the deck opens on, dimmed hard so it never competes with the
+ * glass — the device is what you are reading, and the world is only depth.
+ */
+.play-bg {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  display: block; z-index: 0; opacity: .38;
+  filter: saturate(.72) brightness(.62);
+  pointer-events: none;
+}
+.play .dev3d { z-index: 1; }
+.play-hud, .play-actions, .play-plan, .play-status, .play-tx, .play-err { z-index: 4; }
+
+/* Pixel plates, matching the site nav rather than the old rounded pills. */
+.play-hud {
+  display: flex; gap: 2px; padding: 4px;
+  background: #100e1c; border: 3px solid #342f52;
+  box-shadow: 0 0 0 3px #07060e, 4px 4px 0 rgba(0, 0, 0, .5);
+}
+.play-link {
+  font-family: var(--f-pix-ui), monospace; font-size: 10.5px; letter-spacing: .1em;
+  text-transform: none; color: #b3aacf; padding: 6px 11px; border: 2px solid transparent;
+}
+.play-link:hover { color: #fff; background: #1d1932; border-color: #4a4272; }
+
+.play-actions { gap: 6px; }
+.play-share {
+  font-family: var(--f-pix-ui), monospace; font-size: 11px; letter-spacing: .08em;
+  border-radius: 0; padding: 7px 12px;
+  background: #100e1c; border: 3px solid #342f52; color: #cfc6df;
+  box-shadow: 0 0 0 3px #07060e, 4px 4px 0 rgba(0, 0, 0, .5);
+  transition: color .12s, background .12s, border-color .12s, transform .1s steps(2);
+}
+.play-share:hover { color: #fff; background: #1d1932; border-color: #4a4272; }
+.play-share:active { transform: translate(2px, 2px); }
+.play-share svg { width: 15px; height: 15px; }
+
+/* ── the share card ──────────────────────────────────────────────────────── */
+.sc-back {
+  position: fixed; inset: 0; z-index: 60; display: grid; place-items: center;
+  padding: 22px; background: rgba(4, 3, 9, .82);
+}
+.sc {
+  display: flex; flex-direction: column; gap: 12px; max-width: min(940px, 94vw);
+  padding: 12px; background: #100e1c; border: 4px solid #3d3660;
+  box-shadow: 0 0 0 4px #07060e, 10px 10px 0 rgba(0, 0, 0, .55);
+}
+.sc-img {
+  display: block; width: 100%; height: auto; max-height: 62vh; object-fit: contain;
+  border: 2px solid #07060e; background: #07060e;
+}
+.sc-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.sc-bar .lp-btn { padding: 9px 16px; font-size: 12.5px; cursor: pointer; background: transparent; }
+.sc-bar .lp-btn-go { background: linear-gradient(#ffd76a, #f0a030); color: #1a1200; }
+.sc-bar .lp-btn-go:hover { background: linear-gradient(#ffe08a, #ffb040); }
+.sc-bar .lp-btn:disabled { opacity: .45; cursor: default; }
+.sc-x {
+  margin-left: auto; background: none; border: 2px solid #342f52; color: #b3aacf;
+  padding: 8px 12px; cursor: pointer; font-size: 12px;
+}
+.sc-x:hover { color: #fff; border-color: #4a4272; }
+.sc-err { margin: 0; font-size: 12px; color: #ffb0b0; font-family: var(--f-pix-ui), monospace; }
+
+@media (max-width: 860px) {
+  .sc-img { max-height: 46vh; }
+  .sc-bar .lp-btn { padding: 8px 12px; font-size: 11.5px; }
+}
+
+/* ── /play: the name, on desktop ──────────────────────────────────────────
+ * A second door to the same deterministic sequence the device's profile row
+ * already offers. It is desktop-only because the phone layout gives the whole
+ * screen to the device, and the device can already do this with its own wheel.
+ */
+.play-who {
+  position: absolute; top: 18px; left: 50%; transform: translateX(-50%); z-index: 4;
+  display: flex; align-items: center; gap: 6px; padding: 5px 5px 5px 12px;
+  background: #100e1c; border: 3px solid #342f52;
+  box-shadow: 0 0 0 3px #07060e, 4px 4px 0 rgba(0, 0, 0, .5);
+  font-family: var(--f-pix-ui), monospace;
+}
+.play-who-n { font-size: 11px; letter-spacing: .12em; color: #e8eaed; }
+.play-who-b {
+  font-family: inherit; font-size: 9.5px; letter-spacing: .12em; cursor: pointer;
+  padding: 5px 9px; color: #b3aacf; background: #1d1932; border: 2px solid #342f52;
+}
+.play-who-b:hover { color: #1a1200; background: linear-gradient(#ffd76a, #f0a030); border-color: #ffd76a; }
+.play-who-b:active { transform: translate(1px, 1px); }
+
+@media (max-width: 860px) { .play-who { display: none; } }
