@@ -936,3 +936,41 @@ a { color: inherit; text-decoration: none; }
 .play-who-b:active { transform: translate(1px, 1px); }
 
 @media (max-width: 860px) { .play-who { display: none; } }
+
+/* ── /play: the sign-in gate ──────────────────────────────────────────────
+ * Shown whenever the wallet adapter has loaded and there is no account.
+ *
+ * Its button exists because the automatic `login()` on arrival is fired from an
+ * effect, which is not a user gesture — a mobile browser may suppress the modal,
+ * and it did. A tap here always counts.
+ *
+ * Sits BELOW `.play-rotate` (z-index 40): on a portrait phone the rotate notice is
+ * the more urgent instruction, and two overlays arguing is worse than either.
+ */
+.play-gate {
+  position: absolute; inset: 0; z-index: 30; display: grid; place-items: center;
+  padding: 22px; background: rgba(4, 3, 9, .72);
+}
+.play-gate-card {
+  display: flex; flex-direction: column; gap: 11px; align-items: flex-start;
+  max-width: min(400px, 88vw); padding: 22px 24px 24px;
+  background: #100e1c; border: 3px solid #342f52;
+  box-shadow: 0 0 0 3px #07060e, 7px 7px 0 rgba(0, 0, 0, .5);
+}
+.play-gate-k {
+  margin: 0; font-family: var(--f-pix-ui), monospace; font-size: 10px;
+  letter-spacing: .18em; text-transform: uppercase; color: #f0a030;
+}
+.play-gate-card h2 {
+  margin: 0; font-family: var(--f-pix), ui-monospace, monospace; font-weight: 400;
+  font-size: clamp(16px, 4.6vw, 21px); letter-spacing: .02em; color: #f2f0f7;
+}
+.play-gate-card p { margin: 0; font-size: 13.5px; line-height: 1.65; color: #b8b3cc; }
+.play-gate-card .lp-btn { margin-top: 4px; cursor: pointer; background: linear-gradient(#ffd76a, #f0a030); }
+
+@media (orientation: landscape) and (max-height: 560px) {
+  .play-gate { padding: 12px 12px 12px var(--rail); }
+  .play-gate-card { gap: 7px; padding: 14px 16px 16px; max-width: min(360px, 70vw); }
+  .play-gate-card p { font-size: 12px; line-height: 1.5; }
+  .play-gate-card .lp-btn { padding: 8px 14px; font-size: 12px; }
+}

@@ -336,10 +336,15 @@ export default function Play() {
    * ONBOARDING ON ARRIVAL.
    *
    * If there is no account by the time the wallet adapter has loaded, open Privy's
-   * sign-in immediately rather than leaving someone on a device that quietly cannot
-   * do anything. Guarded by a ref, not by the effect's deps: `connect` is a new
-   * function on most renders, and without the guard this reopens the modal every
-   * time one happens.
+   * sign-in rather than leaving someone on a device that quietly cannot do anything.
+   * Guarded by a ref, not by the effect's deps: `connect` is a new function on most
+   * renders, and without the guard this reopens the modal every time one happens.
+   *
+   * THIS ATTEMPT IS NOT ENOUGH ON ITS OWN. Opening a modal from an effect is not a
+   * user gesture, and a mobile browser is entitled to suppress it — which it did,
+   * silently, leaving a phone on a device that looked fine and could do nothing. So
+   * the gate below renders whenever there is no account, and its button is a real
+   * gesture. The auto-attempt is the convenience; the gate is the guarantee.
    */
   const asked = useRef(false);
   useEffect(() => {
@@ -525,6 +530,22 @@ export default function Play() {
         <span>Share</span>
       </button>
       </div>
+
+      {plan.ready && !plan.address && (
+        <div className="play-gate">
+          <div className="play-gate-card">
+            <p className="play-gate-k">Somnia Shannon testnet</p>
+            <h2>Sign in to play</h2>
+            <p>
+              An email is enough — a wallet is created for you. Test tUSDC is free from
+              the faucet, and nothing here touches real money.
+            </p>
+            <button className="lp-btn lp-btn-go" onClick={() => { void plan.connect(); }}>
+              Sign in
+            </button>
+          </div>
+        </div>
+      )}
 
       {card && <ShareCard data={card} onClose={() => setCard(null)} />}
 
