@@ -456,3 +456,26 @@ test("the level scales down on a narrow viewport", async () => {
   assert.match(src, /p\.s \* W \* gauge\(\)/);
   assert.match(src, /p\.h \* H \* gauge\(\)/);
 });
+
+test("onboarding never depends on an auto-opened modal alone", async () => {
+  // `login()` fired from an effect is not a user gesture, and a mobile browser may
+  // suppress it — which it did, silently, leaving a phone on a device that looked
+  // fine and could do nothing. The gate's button is a real gesture.
+  const src = await readFile(new URL("../app/play/page.tsx", import.meta.url), "utf8");
+  assert.match(src, /\{plan\.ready && !plan\.address && \(/, "no sign-in gate");
+  assert.match(src, /className="play-gate"/);
+  assert.match(src, /onClick=\{\(\) => \{ void plan\.connect\(\); \}\}/, "the gate does not connect");
+  // And the automatic attempt is still there for the platforms that allow it.
+  assert.match(src, /asked\.current = true;\s*\n\s*void plan\.connect\(\);/);
+});
+
+test("the gate sits below the rotate notice", async () => {
+  // On a portrait phone "turn your device" is the more urgent instruction, and two
+  // overlays arguing is worse than either.
+  const s = await css();
+  const gate = s.match(/\.play-gate \{[^}]*\}/);
+  const rotate = s.match(/\.play-rotate \{[^}]*\}/);
+  assert.ok(gate && rotate);
+  const z = (r: string) => Number(r.match(/z-index:\s*(\d+)/)?.[1] ?? 0);
+  assert.ok(z(gate[0]) < z(rotate[0]), "the gate must not cover the rotate notice");
+});
