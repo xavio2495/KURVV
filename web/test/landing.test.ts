@@ -409,3 +409,50 @@ test("the card is a fixed size, so it is the same picture everywhere", async () 
   // And a slow sheet must not hang the dialog open on a blank canvas.
   assert.match(src, /window\.setTimeout\(finish, \d+\)/);
 });
+
+test("the landscape rail anchors its two stacks to opposite ends", async () => {
+  // They were pinned 8px and 64px from the top, which held only while both were
+  // unstyled boxes. Once each became a bordered plate the first grew past 64px and
+  // sat on the second. Opposite ends means their heights cannot collide.
+  const s = await css();
+  const block = s.match(/@media \(orientation: landscape\) and \(max-height: 560px\) \{[\s\S]*?\n\}/);
+  assert.ok(block, "the landscape rail block is missing");
+  const hud = block[0].match(/\.play-hud \{[^}]*\}/);
+  const act = block[0].match(/\.play-actions \{[^}]*\}/);
+  assert.ok(hud && act, "the rail no longer positions both stacks");
+  assert.match(hud[0], /top:/);
+  assert.match(act[0], /bottom:/);
+  assert.match(act[0], /top:\s*auto/);
+});
+
+test("a status sentence is never squeezed into the rail", async () => {
+  // At 58px wide "No BTC market is open on the 60 second window right now." ran to
+  // nine lines, one word each.
+  const s = await css();
+  const block = s.match(/@media \(orientation: landscape\) and \(max-height: 560px\) \{[\s\S]*?\n\}/);
+  assert.ok(block);
+  const status = block[0].match(/\.play-status, \.play-tx \{[^}]*\}/);
+  assert.ok(status, "the landscape status rule is missing");
+  assert.match(status[0], /left:\s*var\(--rail\)/);
+  assert.doesNotMatch(status[0], /max-width:\s*\d+px/);
+});
+
+test("the landing footer clears the fixed nav on a phone", async () => {
+  // The nav is fixed bottom-centre; without clearance it sits straight on the
+  // footer line, which is how it shipped to a real phone.
+  const s = await css();
+  const phone = s.match(/@media \(max-width: 860px\) \{[\s\S]*?\n\}/);
+  assert.ok(phone, "the phone breakpoint is missing");
+  const foot = phone[0].match(/\.lp-foot \{[^}]*\}/);
+  assert.ok(foot, "the phone footer rule is missing");
+  assert.match(foot[0], /bottom:\s*calc\(\d+px \+ env\(safe-area-inset-bottom\)\)/);
+});
+
+test("the level scales down on a narrow viewport", async () => {
+  // Every placement is a fraction of viewport WIDTH, so a slab that reads as one
+  // platform among many on a desktop is a third of a phone screen.
+  const src = await readFile(new URL("../lib/landing/world.ts", import.meta.url), "utf8");
+  assert.match(src, /const gauge = \(\) =>/);
+  assert.match(src, /p\.s \* W \* gauge\(\)/);
+  assert.match(src, /p\.h \* H \* gauge\(\)/);
+});
