@@ -1,5 +1,6 @@
-import Link from "next/link";
 import { DeviceStage } from "../../components/DeviceStage";
+import { Deck } from "../../components/Deck";
+import { PixelNav } from "../../components/PixelNav";
 
 export const metadata = { title: "KURVV · pitch" };
 
@@ -54,46 +55,56 @@ const SLIDES = [
   },
 ];
 
-/** The deck. Long-form, readable, and the device is present as the artefact. */
+/**
+ * The deck.
+ *
+ * One slide per screen, stepped a whole slide at a time by wheel, arrow keys or a
+ * swipe. Each slide has its own finished scene behind it — see `lib/deck/scenes.ts`
+ * — rather than a shared world that builds as you travel, because a deck is a
+ * sequence of places and not a journey through one.
+ *
+ * `SLIDES` is untouched. This is a presentation of the same words.
+ */
 export default function Pitch() {
   return (
-    <main className="pitch">
-      <header className="pitch-hero">
-        <div>
-          <p className="pitch-kicker">Pitch</p>
-          <h1>KURVV</h1>
-          <p className="pitch-tag">Draw the market. The chain trades it.</p>
-        </div>
-        <div className="pitch-device">
-          <DeviceStage fill={0.82} freeOrbit idleSpin inert />
-        </div>
-      </header>
-
-      {SLIDES.map((s) => (
-        <section className="pitch-slide" key={s.title}>
-          <p className="pitch-kicker">{s.kicker}</p>
-          <h2>{s.title}</h2>
-          {s.body.map((b, i) => <p key={i}>{b}</p>)}
+    <>
+      <Deck>
+        <section className="deck-slide deck-first">
+          <div className="lp-copy">
+            <p className="pitch-kicker">Pitch</p>
+            <h1 className="deck-mark">KURVV</h1>
+            <p className="pitch-tag">Draw the market. The chain trades it.</p>
+            <p className="deck-cue">Scroll, or use the arrow keys</p>
+          </div>
+          <div className="deck-device">
+            <DeviceStage fill={0.82} freeOrbit idleSpin inert />
+          </div>
         </section>
-      ))}
 
-      <section className="pitch-slide pitch-specs">
-        <p className="pitch-kicker">Where it runs</p>
-        <h2>Shannon testnet, settling in tUSDC</h2>
-        <dl>
-          <div><dt>Chain</dt><dd>Somnia Shannon · 50312</dd></div>
-          <div><dt>Collateral</dt><dd>tUSDC · 6 decimals</dd></div>
-          <div><dt>Trigger</dt><dd>Series roll, one subscription per Plan</dd></div>
-          <div><dt>Commit</dt><dd>EIP-7702 batch · approve + open Leg 0</dd></div>
-          <div><dt>Payout</dt><dd>Per Leg, as each window settles</dd></div>
-          <div><dt>Custody</dt><dd>Exact-amount approval, cancellable</dd></div>
-        </dl>
-      </section>
-
-      <footer className="pitch-foot">
-        <Link className="btn btn-primary" href="/play">Open the device</Link>
-        <Link className="btn" href="/">Home</Link>
-      </footer>
-    </main>
+        {SLIDES.map((s, i) => (
+          <section className="deck-slide" key={s.title}>
+            <div className="lp-copy">
+              <p className="pitch-kicker">
+                <span className="deck-n">{String(i + 1).padStart(2, "0")}</span>
+                {s.kicker}
+              </p>
+              <h2>{s.title}</h2>
+              {s.body.map((b, j) => <p key={j}>{b}</p>)}
+              {i === SLIDES.length - 1 ? (
+                <dl className="deck-specs">
+                  <div><dt>Chain</dt><dd>Somnia Shannon · 50312</dd></div>
+                  <div><dt>Collateral</dt><dd>tUSDC · 6 decimals</dd></div>
+                  <div><dt>Trigger</dt><dd>Series roll, one subscription per Plan</dd></div>
+                  <div><dt>Commit</dt><dd>EIP-7702 batch · approve + open Leg 0</dd></div>
+                  <div><dt>Payout</dt><dd>Per Leg, as each Window settles</dd></div>
+                  <div><dt>Custody</dt><dd>Exact-amount approval, cancellable</dd></div>
+                </dl>
+              ) : null}
+            </div>
+          </section>
+        ))}
+      </Deck>
+      <PixelNav />
+    </>
   );
 }
