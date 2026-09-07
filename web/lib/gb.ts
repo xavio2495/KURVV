@@ -85,7 +85,7 @@ export function fill(g: CanvasRenderingContext2D, x: number, y: number, w: numbe
 
 /** One row of the control panel. */
 export interface MenuRow {
-  id: "wallet" | "name" | "stake" | "legs" | "window" | "token" | "skin";
+  id: "wallet" | "name" | "stake" | "legs" | "window" | "token" | "skin" | "help";
   label: string;
   value: string;
   /** A row whose value the scroll can change once it is selected. */
@@ -104,6 +104,16 @@ export interface GbState {
   asset?: string;
   /** Whether the chosen venue has an open Window. `null` while unknown. */
   venueLive?: boolean | null;
+  /**
+   * The standings are up on the big display, so this panel carries the MARKET.
+   *
+   * The bets view is the right companion to a chart or a settings list, because both
+   * are things the player is acting on. It is the wrong companion to a leaderboard:
+   * a table of other people's returns next to your own unplaced bets answers no
+   * question anyone is asking. The market does — it is the thing every row on that
+   * board was trading.
+   */
+  feed?: boolean;
   /**
    * True while the chart holds the main display — the state the user plays in.
    * The panel then carries only what a player needs mid-gesture, not the settings.
@@ -210,6 +220,58 @@ function betChart(g: CanvasRenderingContext2D, s: GbState, y: number, h: number)
 }
 
 /**
+ * THE MARKET, for when the standings own the big display.
+ *
+ * Last price, the move across the observed series, and a sparkline of the same
+ * points the chart is drawing. Deliberately the SAME `points` array — a second feed
+ * for the small screen is a second thing that can disagree with the first.
+ */
+function feedPanel(g: CanvasRenderingContext2D, s: GbState) {
+  const pts = s.points;
+  const last = pts[pts.length - 1];
+  const first = pts[0];
+
+  text(g, `${s.asset ?? "BTC"} MARKET`, 4 * U, 14 * U, GB.darkest, true);
+
+  if (!last) {
+    text(g, "no feed", 4 * U, 30 * U, GB.dark);
+    modeBand(g, s);
+    return;
+  }
+
+  textBig(g, `$${Math.round(last.price).toLocaleString("en-US")}`, 4 * U, 24 * U, GB.darkest);
+
+  if (first && first.price > 0) {
+    const pct = ((last.price - first.price) / first.price) * 100;
+    const tag = `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
+    text(g, tag, GB_W - 5 * U - tag.length * 6.7 * U, 26 * U, GB.dark, true);
+  }
+
+  // Sparkline over the whole observed series.
+  const top = 44 * U;
+  const h = 32 * U;
+  if (pts.length > 1) {
+    let lo = Infinity, hi = -Infinity;
+    for (const p of pts) { if (p.price < lo) lo = p.price; if (p.price > hi) hi = p.price; }
+    const span = Math.max(hi - lo, 1e-9);
+    g.strokeStyle = GB.darkest;
+    g.lineWidth = 2;
+    g.beginPath();
+    pts.forEach((p, i) => {
+      const x = 4 * U + (i / (pts.length - 1)) * (GB_W - 8 * U);
+      const y = top + h - ((p.price - lo) / span) * h;
+      i === 0 ? g.moveTo(x, y) : g.lineTo(x, y);
+    });
+    g.stroke();
+  }
+
+  const foot = GB_H - MODE_H - 16 * U;
+  text(g, s.venueLive === false ? "window closed" : "window open", 4 * U, foot, GB.darkest);
+  text(g, `${pts.length} prints observed`, 4 * U, foot + 9 * U, GB.dark);
+  modeBand(g, s);
+}
+
+/**
  * The control panel.
  *
  * This is the device's only settings surface — the stake readout and the connect key
@@ -226,6 +288,9 @@ export function drawGb(g: CanvasRenderingContext2D, s: GbState) {
   text(g, s.showChart ? `${s.asset ?? "BTC"}/USD` : "KURVV", 3 * U, 2 * U, GB.lightest);
   text(g, s.connected ? "LINKED" : "NO LINK", GB_W - 52 * U, 2 * U, GB.lightest);
 
+  // The standings are on the big display: this panel carries the market, not bets.
+  if (s.feed) { feedPanel(g, s); return; }
+
   if (s.showChart) {
     // The main display is carrying something else — the settings list, the
     // standings, the fire feed, or a flight. So this panel carries the bets, which
@@ -235,7 +300,18 @@ export function drawGb(g: CanvasRenderingContext2D, s: GbState) {
     const money = `$${(Number(staked) / 1e6).toFixed(2)}`;
     text(g, money, GB_W - 5 * U - money.length * 6.7 * U, 14 * U, GB.dark, true);
 
-    betChart(g, s, 28 * U, GB_H - MODE_H - 46 * U);
+    // WHAT IT COSTS AND WHAT IS LEFT, on the same line.
+    //
+    // The total staked was here already; the balance was not, and it only existed on
+    // the OTHER branch of this panel and in a corner of the web page outside the
+    // device. So the one screen showing the bets could not answer "can I afford
+    // this", and the answer that did exist was outside the object the user is
+    // holding. Both numbers belong to the same decision, so they sit together.
+    const bal = s.balance === null || s.balance === undefined
+      ? "----" : (Number(s.balance) / 1e6).toFixed(2);
+    text(g, `staked of $${bal}`, 4 * U, 23 * U, GB.dark);
+
+    betChart(g, s, 34 * U, GB_H - MODE_H - 52 * U);
 
     const foot = GB_H - MODE_H - 16 * U;
     if (s.planId !== null) {

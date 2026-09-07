@@ -3,8 +3,9 @@ import { useEffect, useRef, useState } from "react";
 import { Device3D, type Mode } from "./Device3D";
 import { useDeviceMenu, DEFAULTS } from "../lib/useDeviceMenu";
 import { SKINS, skinByKey } from "../lib/skins";
-import { ASSETS, venueKeyOf, windowsFor, type Venue } from "../lib/venues";
+import { ASSETS, venueKeyOf, venueOf, windowsFor, type Venue } from "../lib/venues";
 import { HANDLE_VARIANTS } from "../lib/handle";
+import { venueIsLive } from "../lib/commit";
 import { sfx } from "../lib/sfx";
 import { useBoard } from "../lib/useBoard";
 import type { DrawPoint } from "../lib/render/types";
@@ -19,6 +20,8 @@ interface Props {
   freeOrbit?: boolean;
   /** The device drifts and never takes a grab; the chart inside it does. */
   floatOnly?: boolean;
+  /** Hold the device flat and still — the phone layout. See `Device3D`. */
+  still?: boolean;
   idleSpin?: boolean;
   particles?: boolean;
   priceRef?: React.RefObject<PricePoint[]>;
@@ -82,7 +85,7 @@ export function DeviceStage(p: Props) {
   const [skinKey, setSkinKey] = useState("frost");
   /** Which channel the big screen carries. The trophy key is a channel on the
    *  machine, not a link off it. */
-  const [screen, setScreen] = useState<"chart" | "settings" | "board" | "autonomy">("chart");
+  const [screen, setScreen] = useState<"chart" | "settings" | "board" | "autonomy" | "guide">("chart");
   const [mode, setMode] = useState<Mode>("draw");
   const [armed, setArmed] = useState(false);
   const [askName, setAskName] = useState(false);
@@ -134,6 +137,10 @@ export function DeviceStage(p: Props) {
      * is a panel nobody sees.
      */
     onProfile: () => setScreen((c) => (c === "board" ? "autonomy" : c === "autonomy" ? "chart" : "board")),
+    // The HELP row hands the big display to the current mode's guide. Selected by
+    // the wheel or by a tap on the settings glass — the same two ways as every other
+    // row, which is the point of putting it in the list rather than on a new key.
+    onHelp: () => setScreen("guide"),
 
     // Back steps out of a row; with a Plan running it is the cancel key.
     onCancel: () => {
@@ -193,6 +200,64 @@ export function DeviceStage(p: Props) {
     onVenue?.(venueKeyOf(menu.windowIndex, menu.tokenIndex));
   }, [onVenue, menu.windowIndex, menu.tokenIndex]);
   useEffect(() => { onStake?.(menu.stakeIndex); }, [onStake, menu.stakeIndex]);
+
+  /**
+   * IF THE OPENING VENUE IS DEAD, LAND ON ONE THAT IS ALIVE.
+   *
+   * Series stall — the 900s one did on 29 Aug and has never come back. The cost is
+   * that the device opens on a venue with no market, the commit key is disabled, and
+   * the only signal is a line of red text. A first-time visitor reads that as "this
+   * is broken", not as "pick a different token".
+   *
+   * IT PROBES RATHER THAN JUST STEPPING THE ASSET, and that is not over-engineering:
+   * on the fast venue BTC and ETH are rolled by the SAME creator and share a
+   * `tradingStart`, so they stall together. Measured — both read the identical newest
+   * window at every sample. Stepping BTC->ETH there would move off a dead venue onto
+   * an equally dead one and report success. The window has to be allowed to change
+   * too, which is why the search covers both axes.
+   *
+   * ORDER: same window first (that is the horizon the user is looking at), then the
+   * same asset on another window, then anything. ONCE, and only before the user has
+   * touched a control — landing somewhere sensible is help, moving under someone's
+   * hands is not.
+   */
+  const switchedRef = useRef(false);
+  const touchedRef = useRef(false);
+  useEffect(() => {
+    if (switchedRef.current || touchedRef.current) return;
+    if (p.venueLive !== false) return;
+    switchedRef.current = true;
+
+    const here = { w: menu.windowIndex, t: menu.tokenIndex };
+    const candidates: { w: number; t: number }[] = [];
+    for (let t = 0; t < ASSETS.length; t++) if (t !== here.t) candidates.push({ w: here.w, t });
+    for (let w = 0; w < windowsFor(here.t).length; w++) if (w !== here.w) candidates.push({ w, t: here.t });
+    for (let t = 0; t < ASSETS.length; t++) {
+      for (let w = 0; w < windowsFor(t).length; w++) {
+        if (!candidates.some((c) => c.w === w && c.t === t) && !(w === here.w && t === here.t)) {
+          candidates.push({ w, t });
+        }
+      }
+    }
+
+    let cancelled = false;
+    void (async () => {
+      for (const c of candidates) {
+        // A window index is only meaningful for its own asset — SOMI offers one.
+        if (c.w >= windowsFor(c.t).length) continue;
+        let live = false;
+        try { live = await venueIsLive(venueOf(venueKeyOf(c.w, c.t))); } catch { live = false; }
+        if (cancelled || touchedRef.current) return;
+        if (!live) continue;
+        const tokenRow = menu.rows.findIndex((r) => r.id === "token");
+        const windowRow = menu.rows.findIndex((r) => r.id === "window");
+        if (c.t !== here.t && tokenRow >= 0) menu.choose(tokenRow, c.t);
+        if (c.w !== here.w && windowRow >= 0) menu.choose(windowRow, c.w);
+        return;
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [p.venueLive, menu]);
   const { onMode } = p;
   useEffect(() => { onMode?.(mode); }, [onMode, mode]);
 
@@ -237,7 +302,7 @@ export function DeviceStage(p: Props) {
       planStartRef={p.planStartRef} planId={p.planId ?? null}
       horizonSec={p.horizonSec} legCount={menu.legs} asset={ASSETS[menu.tokenIndex]}
       mode={mode} screen={screen} drawArmed={armed && !p.inert}
-      floatOnly={p.floatOnly} board={board.rows} boardSample={board.sample}
+      floatOnly={p.floatOnly} still={p.still} board={board.rows} boardSample={board.sample}
       plan={p.plan} venueLive={p.venueLive ?? null}
       fires={p.fires} fireState={p.fireState}
       gates={p.gates} onFlap={p.onFlap ?? null} score={p.score ?? null}
@@ -257,7 +322,7 @@ export function DeviceStage(p: Props) {
         options: menu.optionsFor(openRow),
         selected: menu.selectedFor(openRow),
       }}
-      onSelect={() => menu.press("authorise")}
+      onSelect={() => { touchedRef.current = true; menu.press("authorise"); }}
       /**
        * A finished stroke does NOT disarm.
        *
@@ -270,8 +335,9 @@ export function DeviceStage(p: Props) {
       rows={menu.rows} cursor={menu.cursor} editing={menu.editing}
       connected={chain ? chain.connected : menu.connected}
       walletLabel={chain?.walletLabel}
-      onKey={p.inert ? undefined : menu.press}
+      onKey={p.inert ? undefined : (id) => { touchedRef.current = true; menu.press(id); }}
       onScroll={p.inert ? undefined : (step) => {
+        touchedRef.current = true;
         // On the chart the settings list is not even on screen, so moving a cursor
         // nobody can see is worse than useless. The wheel becomes the stake dial.
         if (screen === "chart") { menu.setStake(step); return; }

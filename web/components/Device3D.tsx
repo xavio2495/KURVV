@@ -8,11 +8,12 @@ import {
   FUTURE_FRACTION, bucketize, priceExtent, timelineInterval, visibleSpanOf, type Bucket,
 } from "../lib/three/buckets";
 import { GB_H, GB_W, drawGb, type MenuRow } from "../lib/gb";
+import { drawGuide } from "../lib/guide";
 import { sfx } from "../lib/sfx";
 import { cellAt, type PixelCells } from "../lib/pixel";
 import type { FlappyView } from "../lib/flappy";
 import { createFlappyScene } from "../lib/flappyScene";
-import { createChartScene, uvToPlot } from "../lib/chartScene";
+import { createChartScene, THEMES, uvToPlot } from "../lib/chartScene";
 
 /** Curves kept on the chart at once. Beyond this the oldest is dropped. */
 const MAX_CURVES = 6;
@@ -104,8 +105,17 @@ export interface Device3DProps {
    * rather than the machine itself. This is how the play surface behaves.
    */
   floatOnly?: boolean;
+  /**
+   * Hold the device flat and still.
+   *
+   * The idle drift is furniture on a desktop — it says the object is real. On a phone
+   * it is the opposite: the console already fills the frame, so a rotation of a few
+   * degrees swings the far edge by a visible amount and every control creeps under a
+   * thumb that is already resting on it. A screen you are touching should not move.
+   */
+  still?: boolean;
   /** Which channel the big screen is showing. */
-  screen?: "chart" | "settings" | "board" | "autonomy";
+  screen?: "chart" | "settings" | "board" | "autonomy" | "guide";
   /** A tap on the settings glass picks a row, or an option from its dropdown. */
   onPickRow?: (i: number) => void;
   onPickOption?: (row: number, option: number) => void;
@@ -260,6 +270,27 @@ export function Device3D(props: Device3DProps) {
     let interval = timelineInterval(live.current.horizonSec ?? 360);
     let extent = { lo: 0, hi: 1 };
     let seriesKey = "";
+    let lastFill: PricePoint | null = null;
+    /**
+     * How far the board has slid, in plan-widths — the same number `chartScene`
+     * computes from `anchor`. Shared through this closure rather than recomputed in
+     * two places, because the renderer and the hit test disagreeing about it is
+     * exactly the bug it exists to prevent.
+     */
+    let plotOff = 0;
+    const plotOffset = () => plotOff;
+    /**
+     * WHEN THE CURRENT PLAN'S COLUMN 0 BEGINS — the origin the board scrolls from.
+     *
+     * Stamped on the transition from NO content to SOME content, never on every
+     * edit. Re-stamping per change would be wrong twice over: painting a grid cell
+     * by cell would snap the whole board back to `now` on each cell, and extending a
+     * Curve would drag everything already drawn along with the cursor.
+     *
+     * A committed Plan overrides it with its own on-chain start, because by then the
+     * chain, not the gesture, decides when column 0 was.
+     */
+    let drawAnchor: number | null = null;
     const refreshSeries = (price: PricePoint[], now: number, horizon: number) => {
       const k = `${price.length}:${price.at(-1)?.t ?? 0}:${horizon}`;
       if (k === seriesKey) return;
@@ -268,7 +299,14 @@ export function Device3D(props: Device3DProps) {
       // The plot devotes its left side to history; PLOT.x0 is the split, so the visible
       // history span is that same fraction of the window.
       buckets = bucketize(price, interval, now - visibleSpanOf(horizon) * (1 - FUTURE_FRACTION));
+      lastFill = price.length ? price[price.length - 1] : null;
       extent = priceExtent([buckets]);
+      // The live print can sit outside the bucketed extent — it is newer than every
+      // bucket close by construction — and a head drawn off the top of the plot is
+      // the bug this whole change was meant to remove.
+      if (lastFill) {
+        extent = { lo: Math.min(extent.lo, lastFill.price), hi: Math.max(extent.hi, lastFill.price) };
+      }
     };
 
     // ── pointer ───────────────────────────────────────────────────────────
@@ -305,7 +343,22 @@ export function Device3D(props: Device3DProps) {
      */
     const screenToCurve = (h: THREE.Intersection): DrawPoint | null => {
       if (!h.uv) return null;
-      return uvToPlot(h.uv.x, h.uv.y);
+      const p = uvToPlot(h.uv.x, h.uv.y);
+      /**
+       * UNDO THE SCROLL, or the gesture lands where the board USED to be.
+       *
+       * The renderer positions plan content by time — `X(u) = x0 + (u + off) * PW` —
+       * so as a Plan ages it slides left. The hit test converts a pixel back to a
+       * plan coordinate and therefore has to apply the SAME offset in reverse. It did
+       * not, so a tap on the right of the board painted a cell that was then drawn
+       * far to its left, and the further the Plan had scrolled the wider the gap.
+       *
+       * Clamped after the correction because `uvToPlot` clamps before it: a point
+       * that has scrolled off the left of the drawable span is not a column anyone
+       * can still bet on.
+       */
+      const u = Math.min(1, Math.max(0, p.u - plotOffset()));
+      return { u, v: p.v };
     };
 
     /**
@@ -547,6 +600,9 @@ export function Device3D(props: Device3DProps) {
       } else if (channel === "board") {
         drawBoard(panelCtx, p.board ?? [], p.skin, !!p.boardSample);
         panelTex.needsUpdate = true;
+      } else if (channel === "guide") {
+        drawGuide(panelCtx, p.mode ?? "draw", p.skin);
+        panelTex.needsUpdate = true;
       } else if (channel === "autonomy") {
         drawAutonomy(panelCtx, p.fires ?? [], p.skin,
           p.fireState ?? { scanning: false, error: null, hasPlan: false, nextOpenSec: null });
@@ -564,7 +620,9 @@ export function Device3D(props: Device3DProps) {
             ? "NO REFERENCE \u00b7 TRY 60s OR 5m"
             : plan.length ? "" : "TAP TOP OR BOTTOM",
           birdVariant: skinIndex(p.skin.key),
-          skyVariant: 4,
+          // Background2 — bright cyan day. Flappy is the SUMMER mode; it was on the
+          // dusk sheet, which is the palette draw mode now owns.
+          skyVariant: 1,
         }, elapsed);
         panelTex.needsUpdate = true;
       }
@@ -591,6 +649,12 @@ export function Device3D(props: Device3DProps) {
         gbKey = k;
         drawGb(gbCtx, {
           showChart: channel !== "chart",
+          // THE MARKET, whenever the big display is showing something that is not the
+          // chart. The settings list and the standings are both surfaces you read
+          // while a Window is running, and neither shows the price — so the panel
+          // beside them carries it rather than repeating a bet total that is already
+          // on the settings screen.
+          feed: channel === "board" || channel === "settings",
           points: p.priceRef?.current ?? [],
           legs,
           planId: p.planId ?? null,
@@ -617,13 +681,36 @@ export function Device3D(props: Device3DProps) {
         const nowSec = Date.now() / 1000;
         const horizon = p.horizonSec ?? 360;
         refreshSeries(p.priceRef?.current ?? [], nowSec, horizon);
+        const hasContent = (p.mode === "pixel"
+          ? (p.cellsRef?.current ?? []).some((c) => c !== undefined && c !== null && c !== 0)
+          : !!p.curveRef?.current?.some((c) => c.length > 1));
+        if (!hasContent) drawAnchor = null;
+        else if (drawAnchor === null) drawAnchor = nowSec;
+
+        /**
+         * THE GESTURE'S OWN ANCHOR WINS.
+         *
+         * `planStart` is when a COMMITTED Plan's column 0 began. Preferring it meant
+         * a Curve drawn while an older Plan was still running got laid out against
+         * that Plan's origin — an offset of many minutes — so the stroke rendered far
+         * to the left of the cursor and, once the hit test used the same number, a
+         * tap on the right of the board painted a cell on the left.
+         *
+         * `drawAnchor` is stamped when the current gesture first has content, so it
+         * is the origin of the thing being drawn RIGHT NOW. It falls back to the
+         * committed Plan's start, which is what positions restored Legs.
+         */
+        const anchor = drawAnchor ?? p.planStartRef?.current ?? null;
+        plotOff = anchor === null ? 0 : (anchor - nowSec) / Math.max(horizon, 1);
+
         chartScene.draw(panelCtx, {
-          buckets, extent, now: nowSec, horizonSec: horizon,
+          buckets, extent, last: lastFill, now: nowSec, horizonSec: horizon,
+          anchor,
           legs, planStart: p.planStartRef?.current ?? null,
           curves: p.curveRef?.current?.length ? p.curveRef.current : null,
           cells: p.mode === "pixel" ? (p.cellsRef?.current ?? null) : null,
           legCount: p.legCount ?? 6,
-          season: skinIndex(p.skin.key),
+          theme: THEMES[p.mode ?? "draw"],
           plan, synthetic,
         }, elapsed);
         panelTex.needsUpdate = true;
@@ -651,7 +738,10 @@ export function Device3D(props: Device3DProps) {
       }
       device.update(dt, elapsed);
 
-      if (p.floatOnly) {
+      if (p.still) {
+        pivot.rotation.set(0, 0, 0);
+        pivot.position.y = 0;
+      } else if (p.floatOnly) {
         // Furniture, not a toy: a slow drift on two axes plus a shallow bob. Small
         // enough that a control never moves out from under the pointer.
         pivot.rotation.y = Math.sin(elapsed * 0.21) * 0.05;

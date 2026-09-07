@@ -26,51 +26,88 @@ import type { DrawPoint, LegRenderState, LegView } from "./render/types";
  * price line the only high-contrast thing on it.
  */
 
-/** Tile size in every sheet of this pack. */
-const T = 16;
-/**
- * The terrain rows.
- *
- * `y: 272` is the top row of the leftmost terrain block, verified opaque at the same
- * coordinates in all four season sheets even though two of them are narrower.
- * `y: 288` is the fill row below it.
- */
-const SURFACE = { x: 16, y: 272 };
-const FILL = { x: 16, y: 288 };
 
-const SEASONS = ["summer", "spring", "autumn", "winter"] as const;
 
 /**
- * The animated near band, from `foreground_.png`.
+ * THE THEME IS THE MODE, not the skin.
  *
- * Seven colours down the sheet, EIGHT FRAMES across each — measured, not assumed:
- * the opaque pixel count per cell runs 96, 90, 80, 70, 64, 70, 80, 90, which is one
- * wave rising and falling and could not be a horizontal tiling. Row 7 holds the
- * matching solid fill for each colour, so the band below the crest is the artwork's
- * own colour rather than one picked to look close.
- */
-const FORE = { frames: 8, fillRow: 7 };
-/** Which colour band each season wears. Indexes rows of `foreground_.png`. */
-const FORE_ROW = [6, 0, 2, 3];
-
-/**
- * The parallax stack, far to near.
+ * The three modes are three different games and were reading as one screen with the
+ * furniture rearranged. Worse, all three sat under the same near-black wash, so the
+ * source art's bright pixel palette arrived on screen looking like a badly calibrated
+ * monitor rather than a deliberate colour. Flappy escaped that only because it draws
+ * its own full-bleed sky and never used this wash at all — which is exactly why it
+ * was the one that looked right.
  *
- * `top` is the crest as a fraction of the frame; each band fills from there to the
- * bottom, so nearer bands bury the ones behind and no gap can open between them.
- * `haze` is how much black goes over the band once it is drawn — aerial perspective,
- * which is what makes four bands of the same tiles read as distance rather than as
- * repetition. `speed` is a fraction of the near band's scroll.
+ * So each mode gets a season AND a palette, and the wash is tinted rather than
+ * neutral: colour, not grey, is what makes a dark screen read as a choice.
+ *
+ *  draw   night / neon  — indigo over the autumn sheet, magenta and cyan line work
+ *  pixel  winter        — cold slate over the winter sheet, ice-blue lattice
+ *  flappy summer        — untouched; `flappyScene` owns its own sky
+ *
+ * The skin still recolours the device and the Legs. It no longer picks the world,
+ * because two independent things were choosing the same variable and the mode is the
+ * one a player is actually looking at.
  */
-const BANDS = [
-  { top: 0.0, speed: 0.05, scale: 2, haze: 0.8, season: false },
-  { top: 0.32, speed: 0.13, scale: 2, haze: 0.7, season: false },
-  { top: 0.55, speed: 0.26, scale: 3, haze: 0.6, season: true },
-  { top: 0.76, speed: 0.48, scale: 4, haze: 0.48, season: true },
-] as const;
+export interface ChartTheme {
+  /** Which scene the mode paints. */
+  backdrop: "neon" | "industrial";
+  /** Tint over the future span, marking it as a region. */
+  future: string;
+  /** The price line, and the glow it throws. */
+  line: string;
+  glow: string;
+  /** Window separators and the `now` edge. */
+  grid: string;
+  edge: string;
+  /** Grid mode's plate and lattice. */
+  plate: string;
+  lattice: string;
+}
 
-/** Pixels the near band travels per second. Everything else is a fraction of it. */
-const SCROLL = 26;
+export const THEMES: Record<"draw" | "pixel" | "flappy", ChartTheme> = {
+  // Autumn's sheet is the darkest of the four, which is what lets an indigo wash
+  // read as night rather than as a green field with the lights off.
+  draw: {
+    backdrop: "neon",
+    future: "rgba(10,4,30,.24)",
+    line: "#37f5ff",
+    glow: "rgba(55,245,255,.30)",
+    grid: "rgba(190,120,255,.20)",
+    edge: "rgba(255,90,220,.70)",
+    plate: "rgba(10,6,28,.55)",
+    lattice: "rgba(190,120,255,.22)",
+  },
+  pixel: {
+    backdrop: "industrial",
+    future: "rgba(255,150,40,.05)",
+    // HAZARD ORANGE, which is this pack's signature and nothing else on the device
+    // uses. Two dark scenes need different hues, or the second reads as the first
+    // with the lights changed.
+    line: "#ffab40",
+    glow: "rgba(255,171,64,.34)",
+    grid: "rgba(196,206,232,.20)",
+    edge: "rgba(255,171,64,.72)",
+    // NO PLATE. A white rectangle under the lattice was an overlay by another name.
+    // The wall behind the grid is already flat and dark, which is the whole reason
+    // that backdrop is built the way it is.
+    plate: "rgba(0,0,0,0)",
+    lattice: "rgba(206,216,238,.26)",
+  },
+  // Flappy never reaches this renderer, but a mode without an entry would be a
+  // lookup that silently falls back rather than a compile error.
+  flappy: {
+    backdrop: "neon",
+    future: "rgba(10,9,20,.20)",
+    line: "#6bffe0",
+    glow: "rgba(107,255,224,.28)",
+    grid: "rgba(255,255,255,.13)",
+    edge: "rgba(255,255,255,.5)",
+    plate: "rgba(8,7,14,.50)",
+    lattice: "rgba(255,255,255,.16)",
+  },
+};
+
 
 /**
  * Where a Curve may be drawn, in canvas pixels.
@@ -84,7 +121,7 @@ export const PLOT = {
   x0: Math.round(MAIN_W * (1 - FUTURE_FRACTION)),
   x1: MAIN_W - 16,
   y0: 84,
-  y1: Math.round(MAIN_H * 0.78),
+  y1: Math.round(MAIN_H * 0.86),
 };
 
 /** A hit on the glass, as a point in the drawable span. `uv.y` is bottom-up. */
@@ -112,6 +149,20 @@ export function columnsOf(cells: PixelCells): number[] {
 
 export interface ChartSceneState {
   buckets: Bucket[];
+  /**
+   * The newest raw fill, UNBUCKETED — what the ticker actually reads.
+   *
+   * The buckets are a RESOLUTION choice and scale with the horizon: 5s on the 60s
+   * venue but **30s on the 5-minute one and 300s on the hourly**. So the drawn line
+   * cannot step more often than that, and on a 5-minute Window the head appeared to
+   * freeze for half a minute at a time even though the spot book prints every ~10s
+   * and the poll runs at 1.5s. Nothing was stale; the display was quantised.
+   *
+   * History stays bucketed — that is what keeps a long span readable. Only the head
+   * bead and the level line it throws forward use the live print, because those are
+   * the two marks a viewer reads as "the current price".
+   */
+  last: { t: number; price: number } | null;
   extent: { lo: number; hi: number };
   now: number;
   horizonSec: number;
@@ -122,8 +173,20 @@ export interface ChartSceneState {
   /** Grid mode's painted cells, or null in draw mode. */
   cells: PixelCells | null;
   legCount: number;
-  /** Which season the world wears. Follows the device skin. */
-  season: number;
+  /**
+   * WHEN COLUMN 0 OF THE PLAN BEGINS, as a unix second — or null for a plan that is
+   * not anchored in time yet.
+   *
+   * This is what makes the board SCROLL. Plan content used to be laid out by column
+   * index against a fixed span, so a drawn Curve sat still while the price walked
+   * underneath it and the relationship between the two was left to the viewer to
+   * imagine. Anchored in time, every Leg has a real position on the timeline: `now`
+   * stays put and the Plan slides left through it, so a Window that has elapsed ends
+   * up over the price that actually happened during it.
+   */
+  anchor: number | null;
+  /** The mode's palette and season. See `THEMES`. */
+  theme: ChartTheme;
   /** Committed Plan, for the strip along the bottom. */
   plan: { direction: "UP" | "DOWN"; stake: bigint }[];
   synthetic: number;
@@ -142,11 +205,150 @@ const COIN_FRAMES = 12;
 
 export function createChartScene(): ChartScene {
   let disposed = false;
-  const seasons = SEASONS.map((s) => loadSprite(`/world/seasons/${s}_.png`));
-  const objects = loadSprite("/world/objects/staticObjects_.png");
-  const dirt = loadSprite("/world/terrain_.png");
-  const fore = loadSprite("/world/foreground_.png");
   const coin = loadSprite("/world/objects/coin_.png");
+  // Draw mode's world. Silhouettes on transparency, so the sky behind them is ours.
+  const neonCityFar = loadSprite("/neon/city_02.png");
+  const neonCityNear = loadSprite("/neon/city_01.png");
+  const neonCloudFar = loadSprite("/neon/Cloud2.png");
+  const neonCloudNear = loadSprite("/neon/Cloud1.png");
+  const neonFog = loadSprite("/neon/BG_fog.png");
+  const neonTiles = loadSprite("/neon/tiles_16x16.png");
+  // Grid mode's world.
+  const indWall = loadSprite("/industrial/paralax-background.png");
+  const indTiles = loadSprite("/industrial/industrial-tileset.png");
+  const indPipe = loadSprite("/industrial/straight-pipe.png");
+
+  /**
+   * DRAW MODE — a neon city at night, drawn at full strength.
+   *
+   * Back to front: sky, far clouds, far skyline, near skyline, fog, street. The two
+   * skyline sheets are the same buildings in two values, so putting the darker one
+   * behind and offsetting its speed is what makes depth out of two files.
+   *
+   * The data sits in the upper-middle of the frame, which is sky here — a flat, dark,
+   * untextured field. That is the legibility mechanism now, in place of the wash: the
+   * busy part of the picture is the skyline along the bottom, below everything the
+   * chart draws.
+   */
+  const neonBackdrop = (ctx: CanvasRenderingContext2D, elapsed: number) => {
+    const sky = ctx.createLinearGradient(0, 0, 0, MAIN_H);
+    sky.addColorStop(0, "#0d0722");
+    sky.addColorStop(0.5, "#1b0f3a");
+    sky.addColorStop(1, "#33164a");
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, MAIN_W, MAIN_H);
+
+    // THE PACK AT ITS OWN SIZE. Scaling these sheets to fractions of the canvas made
+    // each building 200px wide and the skyline swallowed the plot — the layers were
+    // the right layers at the wrong scale. They are authored around a 320x180 view
+    // (`BG_fog.png` is exactly that), so they get an INTEGER pixel scale and are
+    // tiled to fill, which is how the pack is meant to be used and the only way the
+    // nearest-neighbour upscale stays crisp.
+    //
+    // Everything sits BELOW the plot. `PLOT.y1` is the floor of the drawable area, so
+    // the skyline's crest starts under it and the data never competes with a window
+    // ledge. The two city sheets are the same buildings in two values: the LIGHTER
+    // one goes far — at night a city's distance reads as haze, not as darkness — and
+    // the darker one near, which also puts the heaviest mass at the very bottom.
+    const K = 2;
+    const street = MAIN_H - 16 * K * 2;
+
+    const layer = (
+      img: HTMLImageElement | null, bottom: number, speed: number, alpha = 1,
+    ) => {
+      if (!ready(img)) return;
+      const w = img.naturalWidth * K;
+      const h = img.naturalHeight * K;
+      const y = Math.round(bottom - h);
+      const shift = Math.floor((elapsed * speed) % w);
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      for (let x = -w - shift; x < MAIN_W + w; x += w) ctx.drawImage(img, Math.round(x), y, w, h);
+      ctx.restore();
+    };
+
+    layer(neonCloudFar, street - 150, 4, 0.20);
+    layer(neonCloudNear, street - 90, 7, 0.16);
+    layer(neonCityNear, street + 40, 6);
+    layer(neonCityFar, street + 96, 12);
+    layer(neonFog, street + 30, 16, 0.45);
+
+    // The street. `(16,0)` is the surface row and `(16,16)` the interior below it.
+    if (ready(neonTiles)) {
+      const step = 16 * K;
+      const shift = Math.floor((elapsed * 20) % step);
+      for (let x = -step - shift; x < MAIN_W + step; x += step) {
+        ctx.drawImage(neonTiles, 16, 0, 16, 16, Math.round(x), street, step, step);
+        ctx.drawImage(neonTiles, 16, 16, 16, 16, Math.round(x), street + step, step, step);
+      }
+    }
+  };
+
+  /**
+   * GRID MODE — an industrial facility.
+   *
+   * Not winter. The board is a lattice of thirteen hairlines, and the one thing it
+   * cannot survive is a busy backdrop: snow tiles under the grid made the grid
+   * disappear, and no amount of recolouring fixes texture sitting behind fine lines.
+   * So this scene is built the other way round — a FLAT, DARK, QUIET wall across the
+   * whole plot, with everything textured pushed outside it.
+   *
+   * The pack's own parallax wall is exactly that: dark, low-contrast, small windows.
+   * The steel floor goes below `PLOT.y1` and the pipe run above `PLOT.y0`, so the
+   * band the grid occupies is the plainest part of the picture by construction.
+   *
+   * Hazard orange is the mode's signature. Draw mode owns purple and cyan and flappy
+   * owns daylight blue; a third dark scene needs its own hue or it reads as draw mode
+   * with the lights changed.
+   */
+  const industrialBackdrop = (ctx: CanvasRenderingContext2D, elapsed: number) => {
+    const sky = ctx.createLinearGradient(0, 0, 0, MAIN_H);
+    sky.addColorStop(0, "#1a1c2b");
+    sky.addColorStop(0.6, "#232538");
+    sky.addColorStop(1, "#2c2f45");
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, MAIN_W, MAIN_H);
+
+    const K = 3;
+    const floor = MAIN_H - 16 * K * 2;
+
+    // The wall, drifting slowly. Dimmed a little because it is a backdrop for a
+    // lattice, not a scene in its own right.
+    if (ready(indWall)) {
+      const w = indWall.naturalWidth * K;
+      const h = indWall.naturalHeight * K;
+      const shift = Math.floor((elapsed * 5) % w);
+      ctx.save();
+      // Quiet. The lattice is thirteen hairlines and the wall is behind them, so it
+      // is texture at a third strength rather than a picture at full.
+      ctx.globalAlpha = 0.3;
+      for (let x = -w - shift; x < MAIN_W + w; x += w) {
+        for (let y = floor - h; y > -h; y -= h) ctx.drawImage(indWall, Math.round(x), y, w, h);
+      }
+      ctx.restore();
+    }
+
+    // The pipe run, above the plot.
+    if (ready(indPipe) && PLOT.y0 > 24) {
+      const w = indPipe.naturalWidth * 2;
+      const h = indPipe.naturalHeight * 2;
+      const shift = Math.floor((elapsed * 9) % w);
+      for (let x = -w - shift; x < MAIN_W + w; x += w) {
+        ctx.drawImage(indPipe, Math.round(x), PLOT.y0 - h - 6, w, h);
+      }
+    }
+
+    // The steel floor, below the plot. `(0,0)` is a plain plated block and `(0,32)`
+    // the hazard-striped edge that caps it.
+    if (ready(indTiles)) {
+      const step = 16 * K;
+      const shift = Math.floor((elapsed * 16) % step);
+      for (let x = -step - shift; x < MAIN_W + step; x += step) {
+        ctx.drawImage(indTiles, 0, 32, 16, 16, Math.round(x), floor, step, step);
+        ctx.drawImage(indTiles, 0, 0, 16, 16, Math.round(x), floor + step, step, step);
+      }
+    }
+  };
 
   /**
    * When each grid column's marker last changed state.
@@ -161,90 +363,82 @@ export function createChartScene(): ChartScene {
   const draw = (ctx: CanvasRenderingContext2D, s: ChartSceneState, elapsed: number) => {
     if (disposed) return;
     ctx.imageSmoothingEnabled = false;
-    const sheet = seasons[s.season % SEASONS.length];
 
-    // ── the parallax backdrop ──────────────────────────────────────────────
-    // Base fill first: a band that has not loaded must not leave the previous frame
-    // showing through, and the darkest terrain tone is the right thing to see if
-    // none of them ever arrive.
-    ctx.fillStyle = "#141018";
-    ctx.fillRect(0, 0, MAIN_W, MAIN_H);
-
-    for (const band of BANDS) {
-      const src = band.season ? sheet : dirt;
-      if (!ready(src)) continue;
-      const step = T * band.scale;
-      const top = Math.round(MAIN_H * band.top);
-      // Scrolled by a whole pixel at a time, so the nearest-neighbour upscale never
-      // lands off-grid and shimmers.
-      const shift = Math.floor((elapsed * SCROLL * band.speed) % step);
-      for (let x = -step - shift; x < MAIN_W + step; x += step) {
-        ctx.drawImage(src, SURFACE.x, SURFACE.y, T, T, Math.round(x), top, step, step);
-        for (let y = top + step; y < MAIN_H; y += step) {
-          ctx.drawImage(src, FILL.x, FILL.y, T, T, Math.round(x), y, step, step);
-        }
-      }
-      if (band.haze > 0) {
-        ctx.fillStyle = `rgba(10,8,16,${band.haze})`;
-        ctx.fillRect(0, top, MAIN_W, MAIN_H - top);
-      }
-    }
-
-    // ── decoration, standing on the third band ─────────────────────────────
-    // Placed from a fixed pattern rather than at random: a backdrop that reshuffles
-    // every frame reads as noise, and one that reshuffles per render is worse.
-    if (ready(objects)) {
-      const line = Math.round(MAIN_H * BANDS[2].top);
-      const drift = elapsed * SCROLL * BANDS[2].speed;
-      const wrap = MAIN_W + 200;
-      const trees: [number, number, number, number][] = [
-        [70, 0, 32, 48], [300, 32, 16, 48], [560, 0, 32, 48], [800, 32, 16, 48],
-      ];
-      ctx.save();
-      ctx.globalAlpha = 0.62;
-      for (const [x, sx, sw, sh] of trees) {
-        const k = 2.0;
-        const px = ((x - drift) % wrap + wrap) % wrap - 100;
-        ctx.drawImage(objects, sx, 0, sw, sh, Math.round(px), line - sh * k + 4, sw * k, sh * k);
-      }
-      ctx.restore();
-    }
-
-    // ── the animated near band ─────────────────────────────────────────────
-    if (ready(fore)) {
-      const row = FORE_ROW[s.season % FORE_ROW.length];
-      const frame = Math.floor(elapsed * 7) % FORE.frames;
-      const scale = 4;
-      const step = T * scale;
-      const top = MAIN_H - step * 2;
-      const shift = Math.floor((elapsed * SCROLL * 0.7) % step);
-      for (let x = -step - shift; x < MAIN_W + step; x += step) {
-        ctx.drawImage(fore, frame * T, row * T, T, T, Math.round(x), top, step, step);
-        ctx.drawImage(fore, row * T, FORE.fillRow * T, T, T, Math.round(x), top + step, step, step);
-      }
-    }
-
-    // Everything above is scenery. This is what stops it competing with the data.
-    ctx.fillStyle = "rgba(8,7,14,.3)";
-    ctx.fillRect(0, 0, MAIN_W, MAIN_H);
+    // ── the backdrop ───────────────────────────────────────────────────────
+    //
+    // NO SCRIM. There used to be a near-black wash over every mode, and it was the
+    // reason the art looked wrong: pixel palettes are chosen for saturation, and a
+    // 30-50% black layer turns a deliberate colour into a washed grey that reads as
+    // a badly calibrated screen. Flappy escaped it only because it draws its own
+    // full-bleed sky and never went through here — which is exactly why flappy was
+    // the mode that looked right.
+    //
+    // So each mode now draws its OWN scene at full strength, and legibility comes
+    // from choosing art whose quiet regions are where the data lives, not from
+    // dimming art that was never the problem.
+    if (s.theme.backdrop === "neon") neonBackdrop(ctx, elapsed);
+    else industrialBackdrop(ctx, elapsed);
 
     const { lo, hi } = s.extent;
     const span = Math.max(hi - lo, 1e-9);
     const Y = (price: number) =>
       PLOT.y1 - ((price - lo) / span) * (PLOT.y1 - PLOT.y0);
     const cols = Math.max(s.legCount, 1);
+    const PW = PLOT.x1 - PLOT.x0;
+    /**
+     * How far the Plan has slid, in plan-widths. 0 at the instant it is anchored,
+     * going negative as time passes. `X(u)` is the only place plan coordinates
+     * become pixels — the Curve, the cells, the Leg blocks and the Window lines all
+     * go through it, so they cannot drift apart.
+     */
+    const off = s.anchor === null ? 0 : (s.anchor - s.now) / Math.max(s.horizonSec, 1);
+    const X = (u: number) => PLOT.x0 + (u + off) * PW;
 
-    // ── Window grid across the future ──────────────────────────────────────
+    // ── the future span, as a PLACE ────────────────────────────────────────
+    //
+    // The Window grid used to be twelve hairlines starting abruptly in mid-screen
+    // over unbroken terrain, which reads as a rendering fault rather than as a board.
+    // Nothing said where the future began or that the lines belonged to it. Three
+    // things fix that and none of them are decoration: the span is tinted so it is a
+    // region, `now` is a real edge, and the edge is labelled.
     ctx.save();
-    ctx.strokeStyle = "rgba(255,255,255,.16)";
+    ctx.fillStyle = s.theme.future;
+    ctx.fillRect(PLOT.x0, 0, MAIN_W - PLOT.x0, MAIN_H);
+
+    // The Window separators belong to the PLAN, so they travel with it. Drawn from
+    // -1 so a column that has scrolled left of `now` keeps its edges while it is
+    // still on screen, and clipped to the plot so nothing escapes into the history.
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(8, 0, PLOT.x1 - 8, MAIN_H);
+    ctx.clip();
+    ctx.strokeStyle = s.theme.grid;
     ctx.lineWidth = 2;
-    for (let i = 0; i <= cols; i++) {
-      const x = Math.round(PLOT.x0 + (i / cols) * (PLOT.x1 - PLOT.x0)) + 0.5;
+    for (let i = -cols; i <= cols; i++) {
+      const x = Math.round(X(i / cols)) + 0.5;
+      if (x < 8 || x > PLOT.x1) continue;
       ctx.beginPath();
       ctx.moveTo(x, PLOT.y0);
       ctx.lineTo(x, PLOT.y1);
       ctx.stroke();
     }
+    ctx.restore();
+
+    // `now`: the boundary between what happened and what can be bet on. Full height,
+    // brighter than the Window lines, and the only labelled thing on the backdrop.
+    const nx = Math.round(PLOT.x0) + 0.5;
+    ctx.strokeStyle = s.theme.edge;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(nx, 0);
+    ctx.lineTo(nx, MAIN_H);
+    ctx.stroke();
+    ctx.fillStyle = s.theme.edge;
+    ctx.font = "800 17px ui-monospace, Menlo, monospace";
+    ctx.fillText("NOW", nx + 10, 30);
+    ctx.textAlign = "right";
+    ctx.fillText("PAST", nx - 10, 30);
+    ctx.textAlign = "left";
     ctx.restore();
 
     // ── the price line ─────────────────────────────────────────────────────
@@ -254,7 +448,7 @@ export function createChartScene(): ChartScene {
         8 + ((t - first) / Math.max(s.now - first, 1)) * (PLOT.x0 - 8);
       ctx.save();
       ctx.lineJoin = ctx.lineCap = "round";
-      ctx.strokeStyle = "#6bffe0";
+      ctx.strokeStyle = s.theme.line;
       ctx.lineWidth = 4;
       ctx.beginPath();
       s.buckets.forEach((b, i) => {
@@ -262,20 +456,24 @@ export function createChartScene(): ChartScene {
         const y = Y(b.close);
         i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
       });
+      // Carry the line to the live print, otherwise the bead detaches from its own
+      // trace for up to one bucket — a floating dot beside a line that stops short.
+      if (s.last) ctx.lineTo(PLOT.x0, Y(s.last.price));
       ctx.stroke();
 
       // The head: a bead on the last print, and the level it sets running forward.
+      // The LIVE print when there is one — see `last` on the state.
       const head = s.buckets[s.buckets.length - 1];
-      const hy = Y(head.close);
+      const hy = Y(s.last ? s.last.price : head.close);
       ctx.setLineDash([10, 9]);
       ctx.lineWidth = 2.5;
-      ctx.strokeStyle = "rgba(107,255,224,.55)";
+      ctx.strokeStyle = s.theme.glow;
       ctx.beginPath();
       ctx.moveTo(PLOT.x0, hy);
       ctx.lineTo(PLOT.x1, hy);
       ctx.stroke();
       ctx.setLineDash([]);
-      ctx.fillStyle = "#6bffe0";
+      ctx.fillStyle = s.theme.line;
       ctx.beginPath();
       ctx.arc(PLOT.x0, hy, 7 + Math.sin(elapsed * 3.1) * 1.6, 0, Math.PI * 2);
       ctx.fill();
@@ -286,9 +484,9 @@ export function createChartScene(): ChartScene {
     // Draw mode only: in grid mode the markers carry the outcome themselves, and a
     // second row of coloured plates saying the same thing is just clutter.
     if (s.planStart !== null && s.legs.length && !s.cells) {
-      const perLeg = (PLOT.x1 - PLOT.x0) / cols;
+      const perLeg = PW / cols;
       s.legs.forEach((leg, i) => {
-        const x = PLOT.x0 + i * perLeg;
+        const x = X(i / cols);
         ctx.save();
         ctx.globalAlpha = leg.state === "pending" ? 0.4 : 0.82;
         ctx.fillStyle = toneOf(leg.state, leg.direction);
@@ -301,17 +499,22 @@ export function createChartScene(): ChartScene {
 
     // ── grid mode ──────────────────────────────────────────────────────────
     if (s.cells) {
-      const cw = (PLOT.x1 - PLOT.x0) / cols;
+      const cw = PW / cols;
       const rows = PIXEL_ROWS * 2 + 1;
       const rh = (PLOT.y1 - PLOT.y0) / rows;
       const midY = PLOT.y0 + PIXEL_ROWS * rh;
       ctx.save();
       // A plate under the board. Thirteen hairlines over four bands of tiled terrain
       // is thirteen invisible hairlines; the grid has to sit ON something.
-      ctx.fillStyle = "rgba(8,7,14,.52)";
-      ctx.fillRect(PLOT.x0, PLOT.y0, PLOT.x1 - PLOT.x0, PLOT.y1 - PLOT.y0);
+      //
+      // FULL BLEED, not `PLOT`-sized. Painting only the board's own rectangle left a
+      // hard four-sided seam with bright terrain outside it, so the board read as a
+      // dialog dropped onto the artwork rather than as the screen's content. The
+      // scenery still shows through at 0.62 — it is a backdrop, not a competitor.
+      ctx.fillStyle = s.theme.plate;
+      ctx.fillRect(0, 0, MAIN_W, MAIN_H);
       // The lattice, so an unpainted board still says what the moves are.
-      ctx.strokeStyle = "rgba(255,255,255,.16)";
+      ctx.strokeStyle = s.theme.lattice;
       ctx.lineWidth = 1;
       for (let r = 0; r <= rows; r++) {
         const y = Math.round(PLOT.y0 + r * rh) + 0.5;
@@ -340,7 +543,7 @@ export function createChartScene(): ChartScene {
         if (!prev || prev.state !== state) marks.set(c, { state, at: elapsed });
         const age = elapsed - (marks.get(c)?.at ?? elapsed);
 
-        const cx = PLOT.x0 + (c + 0.5) * cw;
+        const cx = X((c + 0.5) / cols);
         // Distance from the centre IS the conviction, so the marker's row is the bet.
         const cy = midY + rh / 2 - cell * rh;
         drawMarker(ctx, coin, cx, cy, midY + rh / 2,
@@ -350,7 +553,6 @@ export function createChartScene(): ChartScene {
 
     // ── the drawn Curves ───────────────────────────────────────────────────
     if (s.curves?.length && !s.cells) {
-      const X = (u: number) => PLOT.x0 + u * (PLOT.x1 - PLOT.x0);
       const V = (v: number) => PLOT.y1 - v * (PLOT.y1 - PLOT.y0);
       s.curves.forEach((c, i) => {
         if (c.length < 2) return;
@@ -427,9 +629,36 @@ function drawMarker(
   ctx.stroke();
   ctx.restore();
 
+  /**
+   * THE OUTCOME OUTLIVES THE ANIMATION.
+   *
+   * A win rose out of frame and a loss popped, and both left the cell EMPTY. The
+   * animation is under a second and the Windows it grades are minutes apart, so a
+   * player who looked away for a moment came back to a blank board and concluded
+   * nothing had happened — the one thing the screen most needs to say is the thing it
+   * was erasing. A settled cell now keeps a quiet mark for as long as it is on
+   * screen; the animation is the announcement, this is the record.
+   */
+  const residue = (tone: string, filled: boolean) => {
+    ctx.save();
+    ctx.globalAlpha = 0.85;
+    ctx.strokeStyle = tone;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(cx, cy, S * 0.34, 0, Math.PI * 2);
+    ctx.stroke();
+    if (filled) {
+      ctx.globalAlpha = 0.22;
+      ctx.fillStyle = tone;
+      ctx.fill();
+    }
+    ctx.restore();
+  };
+
   if (state === "lost") {
-    // POP. Under half a second, then the shards are gone and the cell is empty.
+    // POP, then a dim ring where the coin was.
     const t = Math.min(age / 0.45, 1);
+    if (t >= 1) { residue("#ff6a7a", false); return; }
     ctx.save();
     ctx.globalAlpha = 1 - t;
     ctx.fillStyle = "#ff6a7a";
@@ -455,6 +684,7 @@ function drawMarker(
     // RISE. Eases out of the frame and stays gone — a settled winner is money, and
     // money leaving the board is the clearest thing this screen can say.
     const t = Math.min(age / 1.1, 1);
+    if (t >= 1) { residue("#6bffc4", true); return; }
     y = cy - t * t * (cy + S);
     alpha = 1 - Math.max(0, t - 0.7) / 0.3;
   } else if (state === "void" || state === "skipped") {

@@ -37,17 +37,23 @@ const ROW_ICON: Record<string, (g: CanvasRenderingContext2D, x: number, y: numbe
   legs: (g, x, y, c) => { g.strokeStyle = c; g.lineWidth = 3; g.beginPath(); g.moveTo(x - 13, y + 8); g.lineTo(x - 4, y + 8); g.lineTo(x - 4, y - 2); g.lineTo(x + 5, y - 2); g.lineTo(x + 5, y - 9); g.lineTo(x + 13, y - 9); g.stroke(); },
   window: (g, x, y, c) => { g.strokeStyle = c; g.lineWidth = 3; g.beginPath(); g.arc(x, y, 11, 0, Math.PI * 2); g.stroke(); g.beginPath(); g.moveTo(x, y - 6); g.lineTo(x, y); g.lineTo(x + 5, y + 3); g.stroke(); },
   token: (g, x, y, c) => { g.strokeStyle = c; g.lineWidth = 3; g.beginPath(); g.arc(x, y, 11, 0, Math.PI * 2); g.stroke(); g.beginPath(); g.moveTo(x, y - 13); g.lineTo(x, y + 13); g.stroke(); },
+  help: (g, x, y, c) => { g.strokeStyle = c; g.lineWidth = 3; g.beginPath(); g.arc(x, y, 12, 0, Math.PI * 2); g.stroke(); g.beginPath(); g.arc(x, y - 3, 4.5, Math.PI, Math.PI * 2.1); g.stroke(); g.beginPath(); g.moveTo(x + 1.5, y - 0.5); g.lineTo(x, y + 4); g.stroke(); g.fillStyle = c; g.beginPath(); g.arc(x, y + 8, 1.9, 0, Math.PI * 2); g.fill(); },
   skin: (g, x, y, c) => { g.strokeStyle = c; g.lineWidth = 3; g.beginPath(); g.roundRect(x - 12, y - 12, 24, 24, 5); g.stroke(); g.fillStyle = c; g.fillRect(x - 12, y, 24, 12); },
 };
 
 /**
  * Where each row sits, so a tap on the glass can be turned back into a row index.
  *
- * Sized for SEVEN rows, not six. The NAME row appears once a wallet is connected, and
- * at the old 210/84 the seventh row's selection block ran from 680 to 750 — straight
- * under the button-hint footer, which starts at 688. Row 6 now ends at 670.
+ * Sized for EIGHT rows. The count is not fixed: NAME appears only once a wallet is
+ * connected, and HOW TO PLAY was added after that, so the list grows at runtime and
+ * this constant has now been outgrown twice. Both times the symptom was identical —
+ * the last row drawn straight through the button-hint footer, which starts at 688,
+ * and at coordinates `rowAtUV` maps to the footer rather than the row.
+ *
+ * At 170/64 the eighth row's block runs 584-634, clear of the footer. If a ninth row
+ * is ever added, check this again rather than assuming it still fits.
  */
-export const PANEL_ROWS = { top: 200, height: 74 };
+export const PANEL_ROWS = { top: 170, height: 64 };
 export function rowAtUV(v: number, count: number): number {
   // `v` is bottom-up; the list is drawn top-down.
   const y = (1 - v) * MAIN_H;
@@ -163,11 +169,18 @@ export function drawControlLarge(
     const on = i === cursor;
     if (on) {
       // A solid block, not a tint: the selection has to be unmistakable across a room.
+      // CENTRED ON THE BASELINE, because that is what `rowAtUV` assumes: it maps a
+      // tap to `floor((y - top + height/2) / height)`, so row i owns the band centred
+      // on its own baseline. The old constant -34 was tuned by hand against a height
+      // of 74; when the panel was resized to fit eight rows the block drifted 9px off
+      // its own hit target, and taps near a row's top edge selected the row above.
+      const blockH = PANEL_ROWS.height - 14;
+      const blockY = y - blockH / 2;
       g.fillStyle = editing ? accent : "rgba(255,255,255,.13)";
-      g.fillRect(24, y - 34, W - 48, PANEL_ROWS.height - 14);
+      g.fillRect(24, blockY, W - 48, blockH);
       if (editing) {
         g.fillStyle = "rgba(0,0,0,.16)";
-        g.fillRect(24, y - 34, W - 48, PANEL_ROWS.height - 14);
+        g.fillRect(24, blockY, W - 48, blockH);
       }
       // Chevrons: this row is the one the controls act on.
       const nudge = Math.sin(elapsed * 5) * 3;

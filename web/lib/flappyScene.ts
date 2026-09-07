@@ -260,25 +260,30 @@ export function createFlappyScene(): FlappyScene {
     }
     ctx.restore();
 
-    // ── the reference staircase ────────────────────────────────────────────
-    // One rung per Window at its own level. This is the at-the-money reset — the
-    // thing that actually defines the product — and nothing else in the app draws it.
-    ctx.save();
-    ctx.setLineDash([8, 7]);
-    for (const g of v.gates) {
-      const y = Y(g.ref) + 0.5;
-      // Laid twice: a dark rule under a light one. A single white dash disappears
-      // wherever it crosses a cloud, which is most of the frame.
-      for (const [w, tone] of [[7, "rgba(6,10,26,.5)"], [3, "rgba(255,255,255,.8)"]] as const) {
-        ctx.lineWidth = w;
-        ctx.strokeStyle = tone;
-        ctx.beginPath();
-        ctx.moveTo(X(g.col), y);
-        ctx.lineTo(X(g.col + 1), y);
-        ctx.stroke();
-      }
-    }
-    ctx.restore();
+    /**
+     * HOW FAR AHEAD A REFERENCE LEVEL MAY BE SHOWN.
+     *
+     * A fairness bound, not a styling one. A Window's reference IS the previous
+     * Window's close, so `outcome(n)` is decided by `strike(n+1)` — anything drawn AT
+     * a level one column past the bet shows the answer to the bet.
+     *
+     * The dashed staircase that used to leak this is gone entirely. This bound
+     * remains because a called gate's PIPE is also positioned at its reference: the
+     * mouth sits on the level. Without it the same number escapes through the gates
+     * instead, for a Window the player may not have called yet.
+     *
+     * `floor(head) + 1` is the column the next tap lands in. Its own reference is
+     * fair game — that is the level being bet against.
+     */
+    const reveal = Math.floor(head) + 1;
+
+    // NO REFERENCE STAIRCASE. It drew a rung per Window at that Window's own level,
+    // which read as scenery and was in fact the answer key: a Window's reference is
+    // the previous Window's close, so a rung one column past the bet shows the result
+    // of the bet. Bounding how far ahead it drew made it fair but left a row of
+    // dashes that still invited the player to read levels off the sky. The current
+    // level is already carried by the two things that should carry it — the bird
+    // sits ON it, and the red trail is where it has been.
 
     // ── the gates ──────────────────────────────────────────────────────────
     for (const g of v.gates) {
@@ -313,6 +318,31 @@ export function createFlappyScene(): FlappyScene {
       // Capped inside its own column, or a heavy Leg overlaps its neighbour and the
       // world stops reading as one gate per Window.
       const w = colW * Math.min(0.5 + g.weight * 0.9, 0.92);
+
+      // A CALLED gate beyond the reveal bound is drawn as a direction, not as a
+      // level. The pipe's mouth sits AT the reference, so rendering it here would
+      // leak the same number the staircase is withholding — by a different route,
+      // for a Window the player may not have called yet.
+      if (g.col > reveal) {
+        ctx.save();
+        const bw = Math.round(w);
+        const bx = Math.round(cx - bw / 2);
+        ctx.fillStyle = g.dir === "UP" ? "rgba(107,255,224,.16)" : "rgba(255,138,160,.16)";
+        ctx.fillRect(bx, 16, bw, floor - 32);
+        ctx.strokeStyle = g.dir === "UP" ? "rgba(107,255,224,.7)" : "rgba(255,138,160,.7)";
+        ctx.lineWidth = 3;
+        ctx.setLineDash([]);
+        ctx.strokeRect(bx, 16, bw, floor - 32);
+        // Which way it was called, so the board still reads at a glance.
+        ctx.fillStyle = g.dir === "UP" ? "#6bffe0" : "#ff8aa0";
+        ctx.font = "700 20px ui-monospace, Menlo, monospace";
+        ctx.textAlign = "center";
+        ctx.fillText(g.dir === "UP" ? "\u25b2" : "\u25bc", cx, floor * 0.5);
+        ctx.textAlign = "left";
+        ctx.restore();
+        continue;
+      }
+
       if (ready(pipes)) drawPipe(ctx, pipes, PIPE_OF[g.verdict], cx, w, yRef, g.dir === "UP", floor);
 
       // A pending gate breathes, so an unresolved Window reads as unresolved.
@@ -343,8 +373,13 @@ export function createFlappyScene(): FlappyScene {
     const hy = Y(refAt(head));
 
     // The trail behind: where the price has already been, in world coordinates.
+    //
+    // RED, not the amber it shared with the gates. Two different things — the market
+    // and the player's own calls — were drawn in one colour on a busy sky, so the
+    // line that says what actually happened was the hardest thing on screen to pick
+    // out from the things that say what was guessed.
     ctx.save();
-    ctx.strokeStyle = "rgba(255,212,94,.9)";
+    ctx.strokeStyle = "rgba(255,74,74,.95)";
     ctx.lineWidth = 4;
     ctx.lineJoin = ctx.lineCap = "round";
     ctx.beginPath();
