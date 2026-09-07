@@ -43,7 +43,7 @@ export default function Demo() {
   const step = STEPS[i];
   return (
     <main className="play demo">
-      <DeviceStage fill={0.78} particles idleSpin inert />
+      <DeviceStage fill={0.78} idleSpin inert />
 
       <div className="demo-scrim" />
       <div className="demo-tip" style={{ top: step.at.top, left: step.at.left }}>

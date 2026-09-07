@@ -4,17 +4,21 @@ import Link from "next/link";
 import { DeviceStage } from "../../components/DeviceStage";
 import type { Mode } from "../../components/Device3D";
 import { InstallApp } from "../../components/InstallApp";
+import { ShareCard } from "../../components/ShareCard";
+import type { CardData } from "../../lib/share/card";
+import { startDeck } from "../../lib/deck/render";
+import { HANDLE_VARIANTS, handleFor, readHandleVariant, writeHandleVariant } from "../../lib/handle";
 import { curveToPlan, type CurvePoint, type Leg } from "../../lib/curve";
 import { cellsToPlan, emptyCells, hasPositions, type PixelCells } from "../../lib/pixel";
 import { densePriceSeries } from "../../lib/priceSeries";
 import { rollPriceSeries, venueIsLive } from "../../lib/commit";
+import { subscribeFills } from "../../lib/liveFills";
 import { usePlan } from "../../lib/usePlan";
 import { useFlappy } from "../../lib/useFlappy";
 import { useFires } from "../../lib/useFires";
 import { useWindowClock } from "../../lib/useWindowClock";
 import { PLAN_BOOK } from "../../lib/commit";
 import { venueOf, EXPLORER, type Venue } from "../../lib/venues";
-import { fmtUsdc } from "../../lib/chain";
 import { sfx } from "../../lib/sfx";
 import type { DrawPoint } from "../../lib/render/types";
 import type { PricePoint } from "../../lib/render/types";
@@ -34,7 +38,7 @@ export default function Play() {
   const [stakeIndex, setStakeIndex] = useState(2);
   const [preview, setPreview] = useState<Leg[] | null>(null);
   const [drawErr, setDrawErr] = useState<string | null>(null);
-  const [shared, setShared] = useState(false);
+  const [card, setCard] = useState<CardData | null>(null);
   const [muted, setMuted] = useState(false);
   const [venueLive, setVenueLive] = useState<boolean | null>(null);
 
@@ -142,17 +146,35 @@ export default function Play() {
         // 1.5s window and switch the series to a different source; appending onto a
         // base captured beforehand would silently revert that switch and then keep
         // extending the reverted array on every subsequent tick.
-        const cur = priceRef.current;
-        const from = cur.length ? cur[cur.length - 1].t : 0;
-        const fresh = add.filter((p) => p.t > from);
-        if (fresh.length) priceRef.current = [...cur, ...fresh].slice(-4000);
+        merge(add);
       } catch { /* the next tick tries again */ }
     };
 
+    /**
+     * Merge a batch of fills into the series.
+     *
+     * Shared by the socket and the poll so both agree on what "new" means. It reads
+     * `priceRef` at call time rather than closing over it: a slow full refresh can
+     * switch the series to a different source mid-flight, and appending onto a base
+     * captured beforehand would silently revert that switch.
+     */
+    const merge = (add: { t: number; price: number }[]) => {
+      if (stop || !add.length) return;
+      const cur = priceRef.current;
+      const from = cur.length ? cur[cur.length - 1].t : 0;
+      const fresh = add.filter((p) => p.t > from);
+      if (fresh.length) priceRef.current = [...cur, ...fresh].slice(-4000);
+    };
+
+    // PUSHED, with the poll as the fallback. See `lib/liveFills.ts` — the socket is
+    // an optimisation, so the interval stays and simply skips its turn while the
+    // subscription is carrying.
+    const live = subscribeFills(venue.asset, merge);
+
     void run();
     const slow = setInterval(run, 30_000);
-    const fast = setInterval(head, 1_500);
-    return () => { stop = true; clearInterval(slow); clearInterval(fast); };
+    const fast = setInterval(() => { if (!live.connected()) void head(); }, 1_500);
+    return () => { stop = true; live.close(); clearInterval(slow); clearInterval(fast); };
   }, [venue, horizon]);
 
   /**
@@ -166,9 +188,10 @@ export default function Play() {
     /**
      * Dead only after several misses in a row.
      *
-     * A 60-second Window genuinely has no openable market for its last dozen
-     * seconds — `minHeadroom` refuses the tail on purpose — so a single miss is
-     * normal operation, not a stalled series. A dormant venue misses every time.
+     * `venueIsLive` asks about the series' recency, which measured zero misses over
+     * a run spanning several rolls, so this is margin rather than the load-bearing
+     * part it used to be: it now only absorbs a transient indexer error. A dormant
+     * venue misses every time and still reports dead within half a minute.
      */
     let misses = 0;
     const probe = async () => {
@@ -270,6 +293,97 @@ export default function Play() {
     } catch (e) { setDrawErr((e as Error).message); }
   }, [plan, venue, legCount, total, mode, flappy.cells]);
 
+  /**
+   * A GESTURE BELONGS TO THE VENUE IT WAS MADE ON.
+   *
+   * Switching asset or Window used to leave the Curve and the painted cells exactly
+   * where they were, so a shape drawn against BTC's 60-second Windows silently became
+   * a Plan on ETH's — same directions, same stakes, a different market. The preview
+   * still said "6 LEGS READY" and the commit would have gone through.
+   *
+   * Keyed on `venue`, which is the (asset, Window) pair, because both halves
+   * re-target the Legs. Skipped on the FIRST run so opening the page does not clear
+   * a Plan restored from a previous session.
+   */
+  const firstVenue = useRef(true);
+  useEffect(() => {
+    if (firstVenue.current) { firstVenue.current = false; return; }
+    curveRef.current = [];
+    cellsRef.current = emptyCells(legCount);
+    setPreview(null);
+    setDrawErr(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [venue]);
+
+  /**
+   * Is this the phone layout? The console takes the frame almost exactly.
+   *
+   * `fill` is a fraction of the canvas the device occupies, and on a phone every
+   * percent of it is legibility — 0.8 left a fifth of an already small screen empty.
+   * Matched against the same query the stylesheet uses, so the rail the CSS reserves
+   * and the space the device thinks it has cannot disagree.
+   */
+  const [compact, setCompact] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(orientation: landscape) and (max-height: 560px)");
+    const sync = () => setCompact(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+
+  /**
+   * ONBOARDING ON ARRIVAL.
+   *
+   * If there is no account by the time the wallet adapter has loaded, open Privy's
+   * sign-in immediately rather than leaving someone on a device that quietly cannot
+   * do anything. Guarded by a ref, not by the effect's deps: `connect` is a new
+   * function on most renders, and without the guard this reopens the modal every
+   * time one happens.
+   */
+  const asked = useRef(false);
+  useEffect(() => {
+    if (asked.current || !plan.ready || plan.address) return;
+    asked.current = true;
+    void plan.connect();
+  }, [plan.ready, plan.address, plan.connect]);
+
+  /**
+   * The name, on desktop.
+   *
+   * The device has always been able to reroll it from its profile screen, but that
+   * needs a wheel and a keyboard the phone layout does not show. Same store, same
+   * deterministic sequence — this is a second door to it, not a second source.
+   */
+  const [nameVariant, setNameVariant] = useState(0);
+  useEffect(() => {
+    if (!plan.address) return;
+    setNameVariant(readHandleVariant(plan.address) ?? 0);
+  }, [plan.address]);
+
+  const reroll = useCallback(() => {
+    const addr = plan.address;
+    if (!addr) return;
+    setNameVariant((v) => {
+      const next = (v + 1) % HANDLE_VARIANTS;
+      writeHandleVariant(addr, next);
+      window.dispatchEvent(new CustomEvent("kurvv:handle", { detail: { address: addr, variant: next } }));
+      return next;
+    });
+  }, [plan.address]);
+
+  /**
+   * The world behind the device: the same neon-night scene the deck opens on, so
+   * `/play` is somewhere rather than a flat colour. `startDeck` renders a single
+   * scene when handed a constant position.
+   */
+  const bgRef = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const c = bgRef.current;
+    if (!c) return;
+    return startDeck(c, () => 0);
+  }, []);
+
   const onNew = useCallback(() => {
     plan.reset();
     curveRef.current = [];
@@ -278,31 +392,56 @@ export default function Play() {
   }, [plan, legCount]);
 
   /**
-   * Share the moment, not the page. The device's canvas already carries the chart,
-   * the Plan and the skin, so reading it directly beats any screenshot library.
+   * Share the moment, not the page.
+   *
+   * The old version dumped the raw device canvas to a file. This builds a card: the
+   * device, whose handle it is, and what the Plan actually did — see
+   * `lib/share/card.ts`. Reading the device's own canvas beats any screenshot
+   * library, because the chart, the Plan and the skin are already on it.
    */
-  const share = useCallback(async () => {
-    const c = document.querySelector<HTMLCanvasElement>(".dev3d-gl");
-    if (!c) return;
-    const blob = await new Promise<Blob | null>((r) => c.toBlob(r, "image/png"));
-    if (!blob) return;
-    const file = new File([blob], "kurvv.png", { type: "image/png" });
-    const nav = navigator as Navigator & { canShare?: (d: ShareData) => boolean };
-    if (nav.canShare?.({ files: [file] })) {
-      try {
-        await navigator.share({ files: [file], title: "KURVV", text: "Drew the market. The chain traded it." });
-        return;
-      } catch { /* dismissed — fall through to a download */ }
+  const share = useCallback(() => {
+    /**
+     * SNAPSHOT THE DEVICE NOW, while it is still on screen.
+     *
+     * Handing the live WebGL canvas to the dialog does not work: the moment the
+     * modal covers the device it stops drawing, and a preserved buffer whose last
+     * frame was a clear reads back as empty. The card then painted everything
+     * except its subject. Copying to a 2D canvas here freezes the frame the user
+     * actually pressed the button on, which is also the correct one to share.
+     */
+    const live = document.querySelector<HTMLCanvasElement>(".dev3d-gl");
+    let device: HTMLCanvasElement | null = null;
+    if (live && live.width > 0 && live.height > 0) {
+      const shot = document.createElement("canvas");
+      shot.width = live.width;
+      shot.height = live.height;
+      shot.getContext("2d")?.drawImage(live, 0, 0);
+      device = shot;
     }
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "kurvv.png";
-    a.click();
-    URL.revokeObjectURL(url);
-    setShared(true);
-    window.setTimeout(() => setShared(false), 1800);
-  }, []);
+    const addr = plan.address ?? "";
+    // Only SETTLED Legs count. Counting an open position as a loss would report a
+    // result that has not happened yet.
+    let staked = 0n;
+    let paid = 0n;
+    let won = 0;
+    let lost = 0;
+    for (const l of plan.legs) {
+      if (l.state !== "won" && l.state !== "lost" && l.state !== "void") continue;
+      staked += l.stake;
+      paid += l.paid ?? 0n;
+      if (l.state === "won") won += 1;
+      else if (l.state === "lost") lost += 1;
+    }
+    setCard({
+      handle: addr ? handleFor(addr, readHandleVariant(addr) ?? 0) : "guest",
+      net: paid - staked,
+      staked,
+      legs: plan.legs.length,
+      won,
+      lost,
+      device,
+    });
+  }, [plan.address, plan.legs]);
 
   const status = plan.busy ?? plan.err ?? drawErr
     ?? (mode === "flappy" && flappy.unsupported
@@ -314,8 +453,10 @@ export default function Play() {
 
   return (
     <main className="play">
+      <canvas className="play-bg" ref={bgRef} aria-hidden />
+
       <DeviceStage
-        fill={0.8} particles floatOnly
+        fill={compact ? 1 : 0.8} floatOnly still={compact}
         fires={feed.fires}
         fireState={{
           scanning: feed.scanning, error: feed.error,
@@ -349,6 +490,15 @@ export default function Play() {
         <Link className="play-link" href="/play/demo">How it works</Link>
       </div>
 
+      {plan.address && (
+        <div className="play-who">
+          <span className="play-who-n">{handleFor(plan.address, nameVariant).toUpperCase()}</span>
+          <button className="play-who-b" onClick={reroll} title="Change name" aria-label="Change name">
+            NEW NAME
+          </button>
+        </div>
+      )}
+
       <div className="play-actions">
       <InstallApp />
       <button
@@ -372,24 +522,42 @@ export default function Play() {
             stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
           <circle cx="12" cy="13" r="3.6" stroke="currentColor" strokeWidth="1.7" />
         </svg>
-        <span>{shared ? "Saved" : "Share"}</span>
+        <span>Share</span>
       </button>
       </div>
+
+      {card && <ShareCard data={card} onClose={() => setCard(null)} />}
 
       {status && <div className={`play-status ${plan.err || drawErr ? "bad" : ""}`}>{status}</div>}
       {plan.tx && (
         <a className="play-tx" href={`${EXPLORER}/tx/${plan.tx}`} target="_blank" rel="noreferrer">
-          Committed in one transaction · {plan.tx.slice(0, 12)}…
+          {plan.batched ? "Committed in one transaction" : "Committed"} · {plan.tx.slice(0, 12)}…
         </a>
       )}
-      {plan.bal && (
+      {/*
+        THE BALANCE MOVED ONTO THE DEVICE. It used to sit here, outside the object the
+        user is holding, which split one decision across two surfaces — the bets were
+        on the second screen and what you could afford was in a corner of the web
+        page. It is now beside the staked total where it belongs.
+
+        The dry-run badge STAYS. It is not a wallet figure, it is whether pressing
+        commit opens real positions, and that belongs where it cannot be missed.
+      */}
+      {plan.dryRun !== null && (
         <div className="play-bal">
-          {fmtUsdc(plan.bal.usdc, 2)} tUSDC
-          {plan.dryRun !== null && <span className={plan.dryRun ? "" : "live"}>{plan.dryRun ? "dry run" : "live"}</span>}
+          <span className={plan.dryRun ? "" : "live"}>{plan.dryRun ? "dry run" : "live"}</span>
         </div>
       )}
 
-      <div className="play-rotate">Turn your phone for a bigger device</div>
+      {/*
+        Portrait is blocked, not hinted. See `.play-rotate` — the device is a
+        landscape object and a portrait phone renders it too small to operate.
+      */}
+      <div className="play-rotate">
+        <div className="play-rotate-icon" />
+        <strong>Turn your phone sideways</strong>
+        <span>KURVV is a landscape console. Rotate to play.</span>
+      </div>
 
       <div className="play-keys">
         <span><kbd>↑↓</kbd>move</span>
