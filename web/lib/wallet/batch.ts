@@ -30,8 +30,12 @@ export async function sendBatchVia7702(
    * Pass the ACCOUNT, not just its address. A bare address is a JSON-RPC account, so
    * viem routes to `eth_sendTransaction` — which a plain HTTP transport does not
    * serve, and the commit fails with "method does not exist". A local account object
-   * makes viem sign locally and use `eth_sendRawTransaction`. The Privy adapter DOES
-   * pass an address, because its injected provider serves `eth_sendTransaction`.
+   * makes viem sign locally and use `eth_sendRawTransaction`.
+   *
+   * IN PRACTICE ONLY LOCAL ACCOUNTS REACH HERE. `signAuthorization` below rejects a
+   * JSON-RPC account outright, and the one wallet that would have supplied one —
+   * Privy's embedded wallet — cannot send a type-4 transaction at all. See the note
+   * on `sendBatch` in `privy.ts`.
    */
   account: Account | Address,
   calls: BatchCall[],

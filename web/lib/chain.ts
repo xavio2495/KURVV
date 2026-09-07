@@ -1,5 +1,5 @@
 import { createPublicClient, defineChain, http } from "viem";
-import { CHAIN_ID, RPC } from "./venues";
+import { CHAIN_ID, RPC } from "./venues.ts";
 
 export const shannon = defineChain({
   id: CHAIN_ID,

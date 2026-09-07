@@ -3,7 +3,7 @@ import { useWallets, usePrivy } from "@privy-io/react-auth";
 import { createWalletClient, custom, type Address, type EIP1193Provider } from "viem";
 import { useCallback, useMemo, useState, useEffect } from "react";
 import { shannon } from "../chain";
-import { sendBatchVia7702, isDelegatedTo } from "./batch";
+import { isDelegatedTo } from "./batch";
 import type { BatchCall, WalletAdapter } from "./types";
 
 /**
@@ -68,9 +68,36 @@ export function usePrivyAdapter(): WalletAdapter {
       const w = await client();
       return w.sendTransaction({ account: addr as Address, chain: null, to: c.to, value: c.value, data: c.data });
     },
-    sendBatch: async (calls: BatchCall[]) => {
-      const w = await client();
-      return sendBatchVia7702(w, addr as Address, calls);
+    /**
+     * REFUSES. Privy's embedded wallet cannot send an EIP-7702 batch.
+     *
+     * Two independent walls, both measured on Shannon rather than reasoned about:
+     *
+     * 1. It cannot SIGN the authorization through viem. An embedded wallet reached
+     *    over EIP-1193 is a `json-rpc` account, and `walletClient.signAuthorization`
+     *    rejects those outright — `Account type "json-rpc" is not supported.` was the
+     *    first real commit's error, thrown before anything was sent.
+     *
+     * 2. Signing it elsewhere does not help, because it cannot SEND a type-4
+     *    transaction either. Privy's `UnsignedTransactionRequest` has no
+     *    `authorizationList` field, so the field is dropped silently: the wallet sent
+     *    a plain type-2 transaction to the user's own undelegated address, which is a
+     *    no-op that SUCCEEDS. Privy showed "Transaction complete!", ~221k gas was
+     *    burnt, and on-chain there was no delegation, no Plan and no tUSDC moved.
+     *
+     * Sponsoring the type-4 from the server is closed too: `BatchExecutor.execute`
+     * requires `msg.sender == address(this)`, so a server-submitted batch reverts
+     * `OnlySelf()`. Opening that up would hand a relayer the right to drive any
+     * delegated account — a worse trade than a second signature.
+     *
+     * THROWING IS THE POINT. `sendBatch` means ATOMIC, and quietly sending the calls
+     * one after another would hand the caller a weaker guarantee than it asked for
+     * under the same name. A caller that can live without atomicity says so by
+     * sending each call itself — which `usePlan` does, and which is also what lets it
+     * re-read the live Window between the two. See `BuiltPlan.commit`.
+     */
+    sendBatch: async () => {
+      throw new Error("this wallet cannot batch — send the calls individually");
     },
   };
 }
