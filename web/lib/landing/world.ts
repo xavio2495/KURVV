@@ -140,12 +140,22 @@ export function startWorld(
   /** Screen x for a world x, at a given depth. */
   const sx = (x: number, worldX: number, par: number) => x * W - worldX * par;
 
+  /**
+   * How much to shrink the level on a narrow viewport.
+   *
+   * Every placement is a fraction of viewport WIDTH, which keeps the composition
+   * right on a desktop and wrong on a phone: a slab at 0.34 of a 1700px frame reads
+   * as one platform among many, and the same slab on a 360px frame is a third of the
+   * screen. The whole level steps down together so the arrangement survives.
+   */
+  const gauge = () => (W < 620 ? 0.6 : W < 900 ? 0.78 : 1);
+
   const platform = (p: Plat, worldX: number, haze: string) => {
     const spec = PLATS[p.k];
     const img = sheet(spec.src);
     if (!ready(img)) return;
     const d = DEPTH[p.z];
-    const w = Math.round(p.s * W);
+    const w = Math.round(p.s * W * gauge());
     const h = Math.round((w * PLAT_H) / PLAT_W);
     const x = Math.round(sx(p.x, worldX, d.par) - w / 2);
     const y = Math.round(p.y * H);
@@ -177,7 +187,7 @@ export function startWorld(
     if (!ready(objects)) return;
     const [ox, oy, ow, oh] = PROPS[p.k];
     const d = DEPTH[p.z];
-    const h = Math.round(p.h * H);
+    const h = Math.round(p.h * H * gauge());
     const w = Math.round((h * ow) / oh);
     const x = Math.round(sx(p.x, worldX, d.par) - w / 2);
     const y = Math.round(p.y * H - h);
