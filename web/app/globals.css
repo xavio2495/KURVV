@@ -303,8 +303,16 @@ a { color: inherit; text-decoration: none; }
   .lp-h { font-size: clamp(22px, 7vw, 34px); }
   .lp-lede { font-size: 13px; line-height: 1.6; }
   .lp-facts { grid-template-columns: repeat(2, 1fr); gap: 10px 16px; }
-  .lp-stage { height: 28vh; width: 84vw; right: auto; left: 8vw; }
-  .lp-outro { top: 5vh; left: 6vw; width: 84vw; gap: 9px; }
+  .lp-last .lp-outro {
+    top: 3vh; left: 5vw; width: 90vw; gap: 8px; padding: 16px 16px 18px;
+  }
+  .lp-last .lp-h-big { font-size: clamp(24px, 8vw, 34px); }
+  .lp-last .lp-lede { font-size: 12.5px; line-height: 1.55; max-width: none; }
+  .lp-cta { gap: 7px; }
+  .lp-last .lp-btn { padding: 9px 13px; font-size: 12px; }
+  .lp-stage { height: 20vh; width: 90vw; right: auto; left: 5vw; }
+  /* Clear of the fixed nav, which would otherwise sit straight on top of it. */
+  .lp-foot { bottom: calc(56px + env(safe-area-inset-bottom)); font-size: 9.5px; }
   .lp-foot { font-size: 10px; gap: 6px; padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
   .lp-foot nav { gap: 11px; }
 }
@@ -573,30 +581,42 @@ a { color: inherit; text-decoration: none; }
   .play {
     /* The safe area belongs to the RAIL, not to the console. */
     padding: 0;
-    --rail: calc(70px + env(safe-area-inset-left));
+    --rail: calc(84px + env(safe-area-inset-left));
   }
   .play .dev3d { left: var(--rail); right: 0; top: 0; bottom: 0; }
 
-  .play-hud,
+  /* HUD at the top of the rail, actions at the BOTTOM of it.
+   *
+   * They used to be pinned 8px and 64px from the top, which only held while both
+   * were unstyled boxes. Once each became a bordered plate the first one grew past
+   * 64px and sat on top of the second. Anchoring them to opposite ends means their
+   * heights can change without them ever meeting. */
+  .play-hud {
+    left: calc(6px + env(safe-area-inset-left)); right: auto;
+    top: calc(6px + env(safe-area-inset-top));
+    width: calc(var(--rail) - 12px);
+    flex-direction: column; align-items: stretch; gap: 2px;
+    padding: 3px;
+  }
   .play-actions {
-    left: calc(8px + env(safe-area-inset-left));
-    right: auto;
-    width: 58px;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 8px;
+    left: calc(6px + env(safe-area-inset-left)); right: auto;
+    top: auto; bottom: calc(6px + env(safe-area-inset-bottom));
+    width: calc(var(--rail) - 12px);
+    flex-direction: column; align-items: stretch; gap: 4px;
   }
-  .play-hud { top: calc(8px + env(safe-area-inset-top)); }
-  .play-actions { top: calc(64px + env(safe-area-inset-top)); }
 
+  /* The rail is narrow, so a link is one short word per line and must be allowed
+     to wrap rather than being clipped mid-word. */
   .play-link {
-    font-size: 9px; line-height: 1.3; letter-spacing: .06em;
-    max-width: 58px; white-space: normal;
+    font-size: 9px; line-height: 1.25; letter-spacing: .04em;
+    padding: 5px 4px; text-align: center; white-space: normal; overflow-wrap: anywhere;
   }
-  /* Square, so two round buttons stack without the rail growing. */
-  .play-share, .play-mute { padding: 8px; width: 34px; height: 34px; justify-content: center; }
+  .play-share, .play-mute {
+    padding: 7px 4px; width: auto; height: auto; justify-content: center;
+    font-size: 8.5px; letter-spacing: .04em;
+  }
   .play-share span { display: none; }
-  .play-share svg, .play-mute svg { width: 16px; height: 16px; }
+  .play-share svg, .play-mute svg { width: 15px; height: 15px; }
 
   .play-bal {
     top: auto; right: auto;
@@ -604,14 +624,14 @@ a { color: inherit; text-decoration: none; }
     bottom: calc(52px + env(safe-area-inset-bottom));
     font-size: 9px;
   }
+  /* NOT in the rail. At 58px wide a sentence became one word per line and was
+     unreadable — "No BTC market is open on the 60 second window right now." ran to
+     nine lines. It goes under the console instead, where it has the full width. */
   .play-status, .play-tx {
-    left: calc(8px + env(safe-area-inset-left));
-    right: auto;
-    width: 58px; max-width: 58px;
-    font-size: 8.5px; line-height: 1.35;
-    padding: 5px 6px; word-break: break-word;
+    left: var(--rail); right: 8px; width: auto; max-width: none;
+    font-size: 10px; line-height: 1.4; padding: 6px 10px; text-align: center;
   }
-  .play-status { bottom: calc(8px + env(safe-area-inset-bottom)); }
+  .play-status { bottom: calc(4px + env(safe-area-inset-bottom)); }
   /* The explorer link needs a hash to be useful and the rail is 58px wide, so it
      wrapped into an unreadable stack on top of the LIVE badge. The transaction is
      still one tap away from the standings; here it only costs legibility. */
