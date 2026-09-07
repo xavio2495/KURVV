@@ -72,6 +72,8 @@ export function useDeviceMenu(
     /** Returns true if the caller claimed the press, leaving the rows untouched. */
     onCommit?: () => boolean;
     onConnect?: () => void;
+    /** Show the current mode's guide on the big display. */
+    onHelp?: () => void;
   } = {},
 ): MenuState {
   const [cursor, setCursor] = useState(0);
@@ -99,6 +101,20 @@ export function useDeviceMenu(
     setNameVariant(saved ?? 0);
     if (saved === null) writeHandleVariant(address, 0);
   }, [address]);
+  /**
+   * The desktop page can reroll the name too, and both surfaces read the same
+   * localStorage key — but only on mount. Without this the device's profile row and
+   * the chip in the page chrome disagree for the rest of the session.
+   */
+  useEffect(() => {
+    const on = (e: Event) => {
+      const d = (e as CustomEvent<{ address: string; variant: number }>).detail;
+      if (address && d.address.toLowerCase() === address.toLowerCase()) setNameVariant(d.variant);
+    };
+    window.addEventListener("kurvv:handle", on);
+    return () => window.removeEventListener("kurvv:handle", on);
+  }, [address]);
+
   const handle = address ? handleFor(address, nameVariant) : null;
 
   /**
@@ -122,6 +138,17 @@ export function useDeviceMenu(
     { id: "token", label: "TOKEN", value: opts.tokenChoices[tokenIndex], editable: true },
     // Customisation belongs on the device, not in chrome around it.
     { id: "skin", label: "SKIN", value: skin.name.toUpperCase(), editable: true },
+    /**
+     * HOW TO PLAY, as a row rather than a corner.
+     *
+     * Three modes make the same on-chain payload out of three different gestures and
+     * nothing on the device explained any of them. Grid mode is the worst of it: a
+     * lattice with no legend, rows that look like price levels but are conviction,
+     * and a centre row that reads as a small bet and means "skip". Nobody guesses
+     * that. It lives in the list because the list is the one surface the wheel can
+     * already reach and a tap can already pick.
+     */
+    { id: "help", label: "HOW TO PLAY", value: "?", editable: false },
   ];
 
   const clamp = (v: number, n: number) => Math.min(n - 1, Math.max(0, v));
@@ -238,6 +265,7 @@ export function useDeviceMenu(
       // did not.
       case "authorise":
         if (hooks.onCommit?.()) break;
+        if (idAt(c.cursor) === "help") { hooks.onHelp?.(); break; }
         if (idAt(c.cursor) === "wallet") { setConnected((v) => !v); hooks.onConnect?.(); }
         else setEditing((v) => !v);
         break;
@@ -251,7 +279,7 @@ export function useDeviceMenu(
       case "mode": hooks.onMode?.(); break;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hooks.onCommit, hooks.onProfile, hooks.onCancel, hooks.onDraw, hooks.onAsset, hooks.onSwap, hooks.onMode, hooks.onConnect]);
+  }, [hooks.onCommit, hooks.onProfile, hooks.onCancel, hooks.onDraw, hooks.onAsset, hooks.onSwap, hooks.onMode, hooks.onConnect, hooks.onHelp]);
 
   return {
     rows, cursor, editing, connected, stakeIndex, legs, windowIndex: window_, tokenIndex, skin,

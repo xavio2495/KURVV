@@ -79,3 +79,17 @@ export const marketAbi = [
   // Settlement v3 stores a payout VECTOR, not a winner. The winning index is its argmax.
   { name: "payoutNumerators", type: "function", stateMutability: "view", inputs: [], outputs: [{ type: "uint256[]" }] },
 ] as const;
+
+/**
+ * Just enough of the binary pool to ask whether a side of the book exists.
+ *
+ * `isBid` is in YES terms: a BUY_YES lifts the ask (`false`), a BUY_NO works down
+ * from the bid (`true`) — the same convention `PlanBook._openLeg` uses, and it has to
+ * stay the same or the pre-flight check would clear a side the contract never reads.
+ */
+export const binaryPoolAbi = [
+  { name: "getBookLevels", type: "function", stateMutability: "view",
+    inputs: [{ name: "isBid", type: "bool" }, { name: "numLevels", type: "uint64" }],
+    outputs: [{ type: "tuple[]", components: [
+      { name: "price", type: "uint256" }, { name: "quantity", type: "uint256" }] }] },
+] as const;

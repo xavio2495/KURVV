@@ -3,13 +3,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { decodeEventLog, encodeFunctionData, type Address, type Hex } from "viem";
 import { pub } from "./chain";
 import { erc20Abi, planBookAbi } from "./abi";
-import { buildCommit, buildCommitFromLegs, PLAN_BOOK } from "./commit";
+import { buildCommit, buildCommitFromLegs, liveMarket, PLAN_BOOK, type BuiltPlan } from "./commit";
 import { ADDR, EXPLORER, type Venue } from "./venues";
 import { gradeVector } from "./outcome";
 import { payoutCache } from "./payout";
 import { useWallet } from "./wallet";
 import type { CurvePoint, Leg } from "./curve";
-import type { BatchCall } from "./wallet/types";
 import type { LegView } from "./render/types";
 import type { DrawPoint } from "./render/types";
 
@@ -54,6 +53,8 @@ export interface PlanState {
   address?: Address;
   bal: { stt: bigint; usdc: bigint } | null;
   delegated: boolean | null;
+  /** Did the commit land as a single transaction? False on wallets that cannot batch. */
+  batched: boolean;
   dryRun: boolean | null;
   planId: number | null;
   legs: LegView[];
@@ -64,6 +65,14 @@ export interface PlanState {
   legsRef: React.RefObject<LegView[]>;
   /** What to call the signer on screen — "Email wallet", "Metamask", "Demo signer". */
   walletLabel: string;
+  /**
+   * Whether the wallet adapter has finished loading.
+   *
+   * Without this, "no address" is ambiguous: it means both "nobody is signed in" and
+   * "Privy has not answered yet", and anything that reacts to the first will fire
+   * during the second on every load.
+   */
+  ready: boolean;
   /**
    * Connected, but with no STT to pay for gas.
    *
@@ -131,12 +140,47 @@ export function usePlan(venue: Venue): PlanState {
    * stops pixel mode from quietly acquiring a different definition of success.
    */
   const send = useCallback(async (
-    built: { calls: BatchCall[]; market: { tradingStart: number } },
+    built: BuiltPlan,
     v: Venue, total: bigint,
     extra: { curve: DrawPoint[]; legCount: number; cells?: (number | null)[] },
   ) => {
-    setBusy(delegated ? "Sign once — approve + commit…" : "First commit: installing the batch delegate…");
-    const hash = await local.sendBatch(built.calls);
+    // An embedded wallet cannot batch — it signs the approve and the commit
+    // separately — so promising "sign once" or a delegate install there would be a
+    // lie the user catches one modal later. See `sendBatch` in `wallet/privy.ts`.
+    const canBatch = local.kind !== "privy";
+    setBusy(
+      !canBatch ? "Approve, then commit — two signatures…"
+      : delegated ? "Sign once — approve + commit…"
+      : "First commit: installing the batch delegate…",
+    );
+
+    let hash: Hex;
+    if (canBatch) {
+      hash = await local.sendBatch(built.calls);
+    } else {
+      // SEQUENCE, AND RE-READ THE WINDOW IN BETWEEN.
+      //
+      // `commitPlan` opens Leg 0 immediately and refuses a Window with less than
+      // `minHeadroom` left — 12 seconds on the 60s venue. Sending the approval and
+      // waiting for its receipt burns most of that, so reusing the `marketId` chosen
+      // before the approval loses Leg 0 to `LegSkipped(WindowTooShort)`. It did,
+      // once, which is why this is here. The approval depends on nothing but the
+      // total, so the Window is chosen as late as it possibly can be.
+      await pub.waitForTransactionReceipt({ hash: await local.send(built.approve) });
+      // Naming the wait matters: on the 60s venue only ~20% of the cycle is eligible
+      // for Leg 0, so this can sit for half a minute on a series that is running
+      // perfectly. "Confirm the commit" would read as a stuck prompt.
+      setBusy("Waiting for a tradeable Window…");
+      // 8s of margin, not the default 3. Two signatures on an embedded wallet take
+      // longer to land than one from a local key, and this Window has to still be
+      // open when the SECOND one arrives. It is deliberately not larger: Privy signs
+      // without a confirmation dialog (see `PrivyRoot`), so the gap is bounded by
+      // network latency rather than by how long someone takes to read a modal, and a
+      // bigger margin would just idle waiting for a fresher Window than we need.
+      const fresh = await liveMarket(v, 32, 8, built.legs[0].direction === "UP");
+      if (!fresh) throw new Error("no live market with enough headroom — try again in a moment");
+      hash = await local.send(built.commit(fresh));
+    }
     setBusy("Waiting for confirmation…");
     const rc = await pub.waitForTransactionReceipt({ hash });
     if (rc.status !== "success") throw new Error(`reverted — ${EXPLORER}/tx/${hash}`);
@@ -350,10 +394,14 @@ export function usePlan(venue: Venue): PlanState {
   return {
     address: local.address ?? undefined,
     walletLabel: local.label,
+    ready: local.ready,
     // Only once a balance has actually been read. `bal === null` is "not known yet",
     // and treating that as "needs gas" would flash a funding prompt at every user on
     // every load, including the ones who are already funded.
     needsGas: !!local.address && bal !== null && bal.stt < GAS_FLOOR,
+    // Whether the commit actually landed as ONE transaction. An embedded wallet
+    // cannot batch, so claiming it on that path would be false on screen.
+    batched: local.kind !== "privy",
     bal, delegated, dryRun, planId, legs, busy, err, tx,
     planStartRef, legsRef,
     connect, faucet, fundGas, commit, commitLegs, cancel, reset, restored,

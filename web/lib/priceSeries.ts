@@ -65,7 +65,7 @@ const spotCache = new Map<string, Promise<SpotMarket | null>>();
  * Its address is permanent, unlike the per-Window Event Contract pools, but
  * looking it up costs one cached query and keeps the address out of the source.
  */
-function spotMarket(asset: string): Promise<SpotMarket | null> {
+export function spotMarket(asset: string): Promise<SpotMarket | null> {
   const base = SPOT_BASE[asset];
   if (!base) return Promise.resolve(null);
   const hit = spotCache.get(base);

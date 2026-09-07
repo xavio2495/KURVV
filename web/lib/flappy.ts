@@ -1,5 +1,5 @@
 import { INDEXER, type Venue } from "./venues.ts";
-import { PIXEL_ROWS, type PixelCells } from "./pixel.ts";
+import { type PixelCells } from "./pixel.ts";
 
 /**
  * FLAPPY MODE — the data model.
@@ -274,10 +274,33 @@ export function targetAt(run: Run, now: number): number {
  */
 export function tap(run: Run, now: number, up: boolean): boolean {
   if (now < run.startedAt) return false;
-  const c = targetAt(run, now);
-  const cur = run.painted.get(c);
-  const sameSide = cur !== undefined && cur !== 0 && (cur > 0) === up;
-  const magnitude = sameSide ? Math.min(PIXEL_ROWS, Math.abs(cur) + 1) : 1;
-  run.painted.set(c, up ? magnitude : -magnitude);
-  return true;
+
+  /**
+   * A CALLED WINDOW IS LOCKED. The next tap moves to the next uncalled one.
+   *
+   * It used to overwrite whatever was in the target column, which made the game
+   * winnable without predicting anything: call UP, watch the price for a second, and
+   * flip to DOWN before the Window closed. The player was not forecasting, they were
+   * reacting — and the whole product rests on the gesture being a forecast.
+   *
+   * Advancing rather than refusing keeps the input feeling alive: a tap always does
+   * something, it just does it to the next Window along.
+   *
+   * THE COST, and it is real: conviction can no longer be built by tapping the same
+   * side twice, so every flappy Leg carries an equal share of the stake. Draw and
+   * grid still vary it. Restoring it here means allowing a repeat on the SAME side
+   * while forbidding a flip, which is a different rule from the one asked for.
+   */
+  const first = targetAt(run, now);
+  // Bounded by the TARGET's round, not the bird's. When the bird is over the last
+  // column of a round, `targetAt` is already the first column of the next one — so
+  // using the bird's round ended the search before it began and the call was
+  // silently dropped at every round boundary.
+  const end = (Math.floor(first / run.legCount) + 1) * run.legCount;
+  for (let c = first; c < end; c++) {
+    if (run.painted.get(c) !== undefined) continue;
+    run.painted.set(c, up ? 1 : -1);
+    return true;
+  }
+  return false;
 }

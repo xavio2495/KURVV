@@ -1,6 +1,7 @@
 import { encodeFunctionData, type Address } from "viem";
-import { erc20Abi, planBookAbi } from "./abi";
+import { binaryPoolAbi, erc20Abi, planBookAbi } from "./abi";
 import { ADDR, INDEXER, type Venue } from "./venues";
+import { pub } from "./chain";
 import { curveToPlan, type CurvePoint, type Leg } from "./curve";
 import type { BatchCall } from "./wallet/types";
 
@@ -30,15 +31,45 @@ async function gql<T>(query: string): Promise<T> {
  * briefly invisible while the predecessor has already expired. On a 60s Window that
  * blind spot is a real fraction of the cycle — retry rather than fail.
  */
-export async function liveMarket(v: Venue, tries = 12): Promise<LiveMarket | null> {
+export async function liveMarket(
+  v: Venue, tries = 32, marginSec = 3, needUp?: boolean,
+): Promise<LiveMarket | null> {
   for (let i = 0; i < tries; i++) {
-    const cutoff = Math.floor(Date.now() / 1000) + v.minHeadroom + 3;
+    const now = Math.floor(Date.now() / 1000);
+
+    // A Leg-0 Window has to be old enough to have a book AND young enough to still
+    // be open when the transaction lands. Both bounds were paid for on-chain.
+    //
+    // TOO YOUNG is `LegSkipped(NoLiquidity)`. A rolled Window opens with an EMPTY
+    // book on both sides; the venue's maker posts its first quotes ~9s after
+    // `tradingStart`. The Reactivity handler already respects this — that is what
+    // `openDelay` is for — but `commitPlan` opens Leg 0 inline and does not get that
+    // delay for free, so the CLIENT has to apply it when choosing the Window.
+    //
+    // TOO OLD is `LegSkipped(WindowTooShort)`: `_openLeg` refuses a Window with less
+    // than `minHeadroom` left, and `marginSec` is whatever we expect to spend
+    // between here and the block.
+    //
+    // Both were observed in sequence on the 60s venue: fixing the tail turned reason
+    // 7 into reason 8, because preferring the freshest Window walked straight into
+    // the empty book. On that venue the two bounds leave roughly
+    // `[tradingStart+22, tradingStart+40]` — about 18 of every 60 seconds — which is
+    // why the retry budget is generous rather than tight: measured on the 60s venue,
+    // only 20% of samples are eligible and the longest ineligible run is ~34s, so a
+    // budget under about a minute would fail on a perfectly healthy series.
+    const opened = now - v.openDelay;
+    const cutoff = now + v.minHeadroom + marginSec;
     const d = await gql<{ Market: LiveMarket[] }>(`{ Market(where:{
       venueId:{_eq:"${v.venueId}"}, asset:{_eq:"${v.asset}"}, intervalSec:{_eq:"${v.intervalSec}"},
-      finalized:{_eq:false}, expiry:{_gt:"${cutoff}"}
+      finalized:{_eq:false}, expiry:{_gt:"${cutoff}"}, tradingStart:{_lte:"${opened}"}
     }, order_by:{expiry:asc}, limit:1){ marketId poolAddress expiry tradingStart } }`);
     const m = d.Market[0];
-    if (m) return { ...m, expiry: Number(m.expiry), tradingStart: Number(m.tradingStart) };
+    if (m) {
+      const market = { ...m, expiry: Number(m.expiry), tradingStart: Number(m.tradingStart) };
+      // `needUp === undefined` means the caller is not opening a Leg into this
+      // Window immediately and has nothing to pre-flight.
+      if (needUp === undefined || (await sideHasDepth(market.poolAddress, needUp))) return market;
+    }
     await new Promise((r) => setTimeout(r, 2000));
   }
   return null;
@@ -55,41 +86,124 @@ export async function liveMarket(v: Venue, tries = 12): Promise<LiveMarket | nul
  * It matters because a series can stop. The 15-minute series stalled on 29 Aug with
  * its last window unfinalised, and the chain's own token has a registered series that
  * has never rolled at all. Both look identical from the picker unless it is asked.
+ *
+ * ASK ABOUT THE SERIES, NOT ABOUT THIS INSTANT. The obvious query — "is there an
+ * unfinalised market with `minHeadroom` left on it" — answers a different question,
+ * the one `liveMarket` asks on the commit path, and answering it here made the device
+ * lie. A 60-second Window has no openable market for its last dozen seconds by
+ * design, and the successor takes a few more to reach the indexer, so that predicate
+ * measured DEAD in **37-43% of samples with runs up to 19 seconds** on a venue that
+ * was rolling perfectly. At an 8s poll needing three misses, it tripped, and the
+ * screen said "no BTC market is open" straight through a healthy series.
+ *
+ * Recency of the newest Window is the property actually being claimed, and it has no
+ * blind spot: during the roll gap the predecessor is still the newest row and still
+ * recent. Measured over 50 consecutive samples spanning several rolls: **zero
+ * misses**, while the stalled 15-minute series (last Window 24h old) and dormant SOMI
+ * (no Windows at all) both still read dead.
+ *
+ * Two intervals of slack absorbs the roll drift the indexer shows (898s and 3598s
+ * windows) without letting a genuinely stopped series look alive for long.
  */
 export async function venueIsLive(v: Venue): Promise<boolean> {
-  const cutoff = Math.floor(Date.now() / 1000) + v.minHeadroom + 3;
-  const d = await gql<{ Market: { marketId: string }[] }>(`{ Market(where:{
-    venueId:{_eq:"${v.venueId}"}, asset:{_eq:"${v.asset}"}, intervalSec:{_eq:"${v.intervalSec}"},
-    finalized:{_eq:false}, expiry:{_gt:"${cutoff}"}
-  }, limit:1){ marketId } }`);
-  return d.Market.length > 0;
+  const d = await gql<{ Market: { tradingStart: string }[] }>(`{ Market(where:{
+    venueId:{_eq:"${v.venueId}"}, asset:{_eq:"${v.asset}"}, intervalSec:{_eq:"${v.intervalSec}"}
+  }, order_by:{tradingStart:desc}, limit:1){ tradingStart } }`);
+  const newest = d.Market[0];
+  if (!newest) return false;
+  const age = Math.floor(Date.now() / 1000) - Number(newest.tradingStart);
+  return age < 2 * v.intervalSec + 30;
 }
 
 /** Real on-chain settlement references: the opening price of each rolled Window. */
 export async function rollPriceSeries(v: Venue, sinceSec: number): Promise<{ t: number; price: number }[]> {
-  const d = await gql<{ Market: { tradingStart: string; question: string; marketId: string }[] }>(
+  const d = await gql<{ Market: { tradingStart: string; question: string; strike: string; marketId: string }[] }>(
     // Newest first, then reversed. Ascending with a limit takes the OLDEST 400 rows,
     // which on a 60-second series is under seven hours starting from `since` — so a
     // long horizon charted a window of history that ended a day ago.
     `{ Market(where:{venueId:{_eq:"${v.venueId}"}, asset:{_eq:"${v.asset}"},
         intervalSec:{_eq:"${v.intervalSec}"}, tradingStart:{_gt:"${sinceSec}"}},
-        order_by:{tradingStart:desc}, limit:400){ tradingStart question marketId } }`);
-  // The venue writes the reference into the question text; the typed strike field is
-  // 0 for at-or-above markets. Parse defensively and drop anything unparseable.
+        order_by:{tradingStart:desc}, limit:400){ tradingStart question strike marketId } }`);
+  /**
+   * READ THE TYPED FIELD, not the sentence.
+   *
+   * This used to regex a number out of `question`, which dreamDEX's own gotchas page
+   * tells you not to do: the wording has changed several times. It is also
+   * unnecessary — `strike` carries the same number, in hundredths. Verified against
+   * live rows on the fast venue: `strike = 7993155` under a question reading "at or
+   * above 79931.55". A wording change would have silently emptied this series with no
+   * error anywhere, which on a recorded demo is a blank reference line.
+   *
+   * TWO ENCODINGS SHARE THE FIELD, so the text parse survives as a fallback rather
+   * than being deleted. The fast venue publishes real strikes; the rolling venue uses
+   * `strike = 0` as a sentinel for "closes at or above its OPENING price", and its
+   * question carries no number either — so that venue yields no reference series by
+   * either route, and always did. Nothing regressed; it is now visible why.
+   */
   const out: { t: number; price: number }[] = [];
   for (const m of d.Market) {
-    const hit = /([0-9][0-9,]*\.?[0-9]*)/.exec(m.question?.replace(/^[^0-9]*/, "") ?? "");
-    const p = hit ? Number(hit[1].replace(/,/g, "")) : NaN;
+    const strike = Number(m.strike ?? 0);
+    let p = Number.isFinite(strike) && strike > 0 ? strike / 100 : NaN;
+    if (!Number.isFinite(p)) {
+      const hit = /([0-9][0-9,]*\.?[0-9]*)/.exec(m.question?.replace(/^[^0-9]*/, "") ?? "");
+      p = hit ? Number(hit[1].replace(/,/g, "")) : NaN;
+    }
     if (Number.isFinite(p) && p > 0) out.push({ t: Number(m.tradingStart), price: p });
   }
   out.reverse();
   return out;
 }
 
+/**
+ * Does the side of the book this Leg has to take actually have a quote on it?
+ *
+ * NOT A TIMING QUESTION, which is why it is a separate check from the age bounds in
+ * `liveMarket`. Measured on the 60s BTC venue: when a Window prices near an extreme
+ * the maker quotes ONE SIDE ONLY. One observed Window sat at `bid = 0.980` with an
+ * EMPTY ask from age 23s until it expired — an UP Leg lifts the ask, so it could
+ * never have filled there no matter when it arrived. `_openLeg` reads exactly this
+ * and skips with `NoLiquidity`, and that skip consumes the Leg, so the cheap fix is
+ * to ask the same question before committing rather than pay for the answer.
+ *
+ * A read, not a guarantee: the maker can pull between here and the block. It removes
+ * the deterministic case, not the race.
+ */
+export async function sideHasDepth(pool: Address, up: boolean): Promise<boolean> {
+  try {
+    const levels = await pub.readContract({
+      address: pool, abi: binaryPoolAbi, functionName: "getBookLevels",
+      // `!up` mirrors `PlanBook._openLeg`: BUY_YES lifts the ask, BUY_NO the bid.
+      args: [!up, 1n],
+    });
+    return levels.length > 0 && levels[0].price > 0n;
+  } catch {
+    // An unreadable pool is not a reason to block a commit — the contract re-checks.
+    return true;
+  }
+}
+
 export interface BuiltPlan {
   legs: Leg[];
   total: bigint;
+  /** The Window Leg 0 will open into, as chosen at build time. */
   market: LiveMarket;
+  /** Approve EXACTLY the total. Depends on nothing time-sensitive. */
+  approve: BatchCall;
+  /**
+   * `commitPlan` against a given Window — deliberately a function of the market.
+   *
+   * WHY THIS IS LATE-BOUND. `commitPlan` opens Leg 0 immediately, and `_openLeg`
+   * skips with `WindowTooShort` when `expiry < block.timestamp + minHeadroom`. On the
+   * 60-second venue `minHeadroom` is 12s, so a `marketId` chosen more than a few
+   * seconds before the transaction lands is a coin flip. Baking it into a fixed call
+   * array at build time was fine while the commit was ONE transaction landing ~3s
+   * later; it stopped being fine the moment a wallet that cannot batch had to send an
+   * approval first and wait for its receipt. That cost a real Leg 0 to
+   * `LegSkipped(WindowTooShort)`. Callers that sequence must re-read `liveMarket` and
+   * call this again, as late as possible.
+   */
+  commit: (market: LiveMarket) => BatchCall;
+  /** The atomic pair, for a wallet that can actually batch. */
   calls: BatchCall[];
 }
 
@@ -123,20 +237,24 @@ export async function buildCommitFromLegs(
   const sum = legs.reduce((a, l) => a + l.stake, 0n);
   if (sum !== total) throw new Error(`stake allocation off by ${sum - total} base units`);
 
-  const market = await liveMarket(v);
-  if (!market) throw new Error("no live market with enough headroom — try again in a moment");
+  // Leg 0 opens inside `commitPlan`, so the Window it lands in has to be one that
+  // Leg 0's OWN direction can fill. Passing the direction is what turns a generic
+  // "is anything trading" into "can this actually be bought".
+  const market = await liveMarket(v, 32, 3, legs[0].direction === "UP");
+  if (!market) throw new Error("no tradeable window for the first leg — try again in a moment");
 
-  return {
-    legs, total, market,
-    calls: [
-      { to: ADDR.tusdc as Address, value: 0n,
-        data: encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [book, total] }) },
-      { to: book, value: 0n,
-        data: encodeFunctionData({ abi: planBookAbi, functionName: "commitPlan", args: [{
-          marketCreator: v.marketCreator, rollTopic: v.rollTopic, seriesId: v.seriesId,
-          openDelay: v.openDelay, minHeadroom: v.minHeadroom, gasLimit: 20_000_000n,
-          marketId: market.marketId,
-        }, legs.map((l) => (l.direction === "UP" ? 0 : 1)), legs.map((l) => l.stake)] }) },
-    ],
+  const approve: BatchCall = {
+    to: ADDR.tusdc as Address, value: 0n,
+    data: encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [book, total] }),
   };
+  const commit = (m: LiveMarket): BatchCall => ({
+    to: book, value: 0n,
+    data: encodeFunctionData({ abi: planBookAbi, functionName: "commitPlan", args: [{
+      marketCreator: v.marketCreator, rollTopic: v.rollTopic, seriesId: v.seriesId,
+      openDelay: v.openDelay, minHeadroom: v.minHeadroom, gasLimit: 20_000_000n,
+      marketId: m.marketId,
+    }, legs.map((l) => (l.direction === "UP" ? 0 : 1)), legs.map((l) => l.stake)] }),
+  });
+
+  return { legs, total, market, approve, commit, calls: [approve, commit(market)] };
 }

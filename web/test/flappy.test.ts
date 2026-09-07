@@ -4,7 +4,7 @@ import {
   gradeColumn, gradeRun, visualHit, hasReference,
   startRun, columnAt, worldAt, roundAt, roundCells, viewSpan, targetAt, tap, COLUMN_MS, type RefWindow,
 } from "../lib/flappy.ts";
-import { cellsToPlan, PIXEL_ROWS } from "../lib/pixel.ts";
+import { cellsToPlan } from "../lib/pixel.ts";
 
 const w = (o: 0 | 1 | null, strike = 100, voided = false): RefWindow =>
   ({ tradingStart: 0, expiry: 60, strike, outcome: voided ? null : o, voided });
@@ -119,21 +119,33 @@ test("the frame shows about 30% more Windows than a round has", () => {
   assert.ok(viewSpan(2) >= 4);
 });
 
-test("tapping the same side stacks, the other side flips and resets", () => {
+test("a called Window is LOCKED — the next tap moves to the next one", () => {
+  // The exploit this closes: call UP, watch the price move, flip to DOWN before the
+  // Window closes. That is reacting, not forecasting, and it made the game winnable
+  // without predicting anything.
   const run = startRun(4, 0);
   const t = COLUMN_MS * 0.5;
   assert.equal(tap(run, t, true), true);
   assert.equal(run.painted.get(1), 1);
-  tap(run, t, true);
-  assert.equal(run.painted.get(1), 2, "same side stacks");
+
   tap(run, t, false);
-  assert.equal(run.painted.get(1), -1, "the other side flips and resets to one");
+  assert.equal(run.painted.get(1), 1, "the call already made is untouchable");
+  assert.equal(run.painted.get(2), -1, "the tap lands on the next Window instead");
+
+  tap(run, t, true);
+  assert.equal(run.painted.get(3), 1, "and the one after that");
 });
 
-test("conviction caps at the grid's height", () => {
-  const run = startRun(2, 0);
-  for (let i = 0; i < 40; i++) tap(run, 10, true);
-  assert.equal(run.painted.get(1), PIXEL_ROWS);
+test("a round fills up, and then taps do nothing", () => {
+  // Bounded by the target's ROUND. Without a bound a tap would walk forward for ever
+  // and paint Windows the player cannot see coming.
+  const run = startRun(4, 0);
+  const t = COLUMN_MS * 0.5;
+  assert.equal(tap(run, t, true), true);   // column 1
+  assert.equal(tap(run, t, true), true);   // column 2
+  assert.equal(tap(run, t, true), true);   // column 3
+  assert.equal(tap(run, t, true), false, "columns 0..3 are the round; 0 is behind the bird");
+  assert.equal(run.painted.size, 3);
 });
 
 test("a round feeds the SAME payload builder as the grid", () => {
@@ -142,7 +154,6 @@ test("a round feeds the SAME payload builder as the grid", () => {
   const run = startRun(6, 0);
   tap(run, COLUMN_MS * 0.5, true);      // -> column 1
   tap(run, COLUMN_MS * 1.5, false);     // -> column 2
-  tap(run, COLUMN_MS * 1.5, false);     // -> column 2 again, stacking
   tap(run, COLUMN_MS * 4.5, true);      // -> column 5
   const total = 2_000_000n;
   const { legs, columns } = cellsToPlan(roundCells(run, 0), { totalStake: total, minWeightShare: 0.05 });
