@@ -133,7 +133,7 @@ async function venueIsLiveLegacy(v: Venue): Promise<boolean> {
 }
 
 /** Real on-chain settlement references: the opening price of each rolled Window. */
-export async function rollPriceSeries(v: Venue, sinceSec: number): Promise<{ t: number; price: number }[]> {
+async function rollPriceSeriesLegacy(v: Venue, sinceSec: number): Promise<{ t: number; price: number }[]> {
   const venueId = await resolveVenueId(v);
   const d = await gql<{ Market: { tradingStart: string; question: string; strike: string; marketId: string }[] }>(
     // Newest first, then reversed. Ascending with a limit takes the OLDEST 400 rows,
@@ -170,6 +170,21 @@ export async function rollPriceSeries(v: Venue, sinceSec: number): Promise<{ t: 
   }
   out.reverse();
   return out;
+}
+
+/**
+ * The chart's price reference — legacy strike-parsing or the SDK.
+ *
+ * The SDK path reads the typed `mode` field and serves BOTH encodings: `strike`
+ * for fixed-strike markets and the reference question's answer for the rest.
+ * The legacy path only ever understood the first, which is why the rolling venue
+ * has never had a reference line.
+ */
+export async function rollPriceSeries(
+  v: Venue, sinceSec: number,
+): Promise<{ t: number; price: number }[]> {
+  if (!USE_SDK) return rollPriceSeriesLegacy(v, sinceSec);
+  return (await import("./dreamdex/series.ts")).rollPriceSeries(v, sinceSec);
 }
 
 /**
