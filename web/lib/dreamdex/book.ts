@@ -1,6 +1,8 @@
 import type { Address } from "viem";
 import { binaryPoolAbi } from "../abi.ts";
 import { pub } from "../chain.ts";
+import { USE_SDK } from "./flag.ts";
+import { sdk } from "./client.ts";
 
 /**
  * The order-book pre-flight.
@@ -26,7 +28,7 @@ import { pub } from "../chain.ts";
  * A read, not a guarantee: the maker can pull between here and the block. It
  * removes the deterministic case, not the race.
  */
-export async function sideHasDepth(pool: Address, up: boolean): Promise<boolean> {
+async function sideHasDepthLegacy(pool: Address, up: boolean): Promise<boolean> {
   try {
     const levels = await pub.readContract({
       address: pool, abi: binaryPoolAbi, functionName: "getBookLevels",
@@ -38,4 +40,34 @@ export async function sideHasDepth(pool: Address, up: boolean): Promise<boolean>
     // An unreadable pool is not a reason to block a commit — the contract re-checks.
     return true;
   }
+}
+
+/**
+ * The same question, asked through the SDK.
+ *
+ * `getBinaryOrderBook` reads `getBookLevels` for both sides in one pipelined
+ * round-trip instead of the single side the legacy path fetches — same contract,
+ * same call, one fewer trip when both sides are wanted.
+ *
+ * THE YES-SIDE ARRAYS ARE THE ONLY CORRECT ONES HERE. The SDK also returns
+ * `noBids` / `noAsks`, which are the same book presented from the NO side by
+ * price inversion. `PlanBook._openLeg` reads the YES book and quotes in YES
+ * terms, so asking the inverted view would be asking a different question than
+ * the contract asks — the exact failure this pre-flight exists to prevent.
+ * `opts.decimals` only affects that inversion, so it is left at its default: the
+ * arrays this function reads are untouched by it.
+ */
+async function sideHasDepthSdk(pool: Address, up: boolean): Promise<boolean> {
+  try {
+    const book = await sdk().getBinaryOrderBook(pool, { depth: 1 });
+    // BUY_YES lifts the ask; BUY_NO works down from the YES bid.
+    const side = up ? book.yesAsks : book.yesBids;
+    return side.length > 0 && side[0].price > 0n;
+  } catch {
+    return true;
+  }
+}
+
+export function sideHasDepth(pool: Address, up: boolean): Promise<boolean> {
+  return USE_SDK ? sideHasDepthSdk(pool, up) : sideHasDepthLegacy(pool, up);
 }
