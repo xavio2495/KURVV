@@ -349,6 +349,10 @@ export function usePlan(venue: Venue): PlanState {
       setBusy("Finding the live Window…");
       const built = await buildCommit(toPoints(curve), v, legCount, total);
       await send(built, v, total, { curve, legCount });
+      // Shown once the commit's own status clears. Null on every venue measured
+      // so far — see `feeNotice`; it exists so a fee that appears is visible
+      // rather than quietly baked into a payout the user already read.
+      if (built.feeNotice) setErr(built.feeNotice);
     } catch (e) {
       setErr((e as Error).message.split("\n").slice(0, 2).join(" "));
     } finally { setBusy(null); }
@@ -371,6 +375,7 @@ export function usePlan(venue: Venue): PlanState {
       setBusy("Finding the live Window…");
       const built = await buildCommitFromLegs(legs, v, total);
       await send(built, v, total, { curve: [], legCount: legs.length, cells });
+      if (built.feeNotice) setErr(built.feeNotice);
     } catch (e) {
       setErr((e as Error).message.split("\n").slice(0, 2).join(" "));
     } finally { setBusy(null); }

@@ -1,6 +1,7 @@
 import { encodeFunctionData, type Address } from "viem";
 import { binaryPoolAbi, erc20Abi, planBookAbi } from "./abi";
 import { ADDR, INDEXER, type Venue } from "./venues";
+import { feeNotice, resolveVenueId, venueFees, type VenueFees } from "./registry.ts";
 import { pub } from "./chain";
 import { curveToPlan, type CurvePoint, type Leg } from "./curve";
 import type { BatchCall } from "./wallet/types";
@@ -12,6 +13,15 @@ export interface LiveMarket {
   poolAddress: Address;
   expiry: number;
   tradingStart: number;
+  /**
+   * The scale THIS market settles in, straight off the indexer row.
+   *
+   * Carried rather than assumed so the venue's declared `quoteDecimals` has
+   * something to be checked against before a stake is sized — see
+   * `buildCommitFromLegs`. Both are on the row for free; disagreeing with the
+   * chain about this is a factor-of-10^12 error that reverts nothing.
+   */
+  quoteDecimals: number;
 }
 
 async function gql<T>(query: string): Promise<T> {
@@ -59,13 +69,17 @@ export async function liveMarket(
     // budget under about a minute would fail on a perfectly healthy series.
     const opened = now - v.openDelay;
     const cutoff = now + v.minHeadroom + marginSec;
+    const venueId = await resolveVenueId(v);
     const d = await gql<{ Market: LiveMarket[] }>(`{ Market(where:{
-      venueId:{_eq:"${v.venueId}"}, asset:{_eq:"${v.asset}"}, intervalSec:{_eq:"${v.intervalSec}"},
+      venueId:{_eq:"${venueId}"}, asset:{_eq:"${v.asset}"}, intervalSec:{_eq:"${v.intervalSec}"},
       finalized:{_eq:false}, expiry:{_gt:"${cutoff}"}, tradingStart:{_lte:"${opened}"}
-    }, order_by:{expiry:asc}, limit:1){ marketId poolAddress expiry tradingStart } }`);
+    }, order_by:{expiry:asc}, limit:1){ marketId poolAddress expiry tradingStart quoteDecimals } }`);
     const m = d.Market[0];
     if (m) {
-      const market = { ...m, expiry: Number(m.expiry), tradingStart: Number(m.tradingStart) };
+      const market = {
+        ...m, expiry: Number(m.expiry), tradingStart: Number(m.tradingStart),
+        quoteDecimals: Number(m.quoteDecimals),
+      };
       // `needUp === undefined` means the caller is not opening a Leg into this
       // Window immediately and has nothing to pre-flight.
       if (needUp === undefined || (await sideHasDepth(market.poolAddress, needUp))) return market;
@@ -106,8 +120,9 @@ export async function liveMarket(
  * windows) without letting a genuinely stopped series look alive for long.
  */
 export async function venueIsLive(v: Venue): Promise<boolean> {
+  const venueId = await resolveVenueId(v);
   const d = await gql<{ Market: { tradingStart: string }[] }>(`{ Market(where:{
-    venueId:{_eq:"${v.venueId}"}, asset:{_eq:"${v.asset}"}, intervalSec:{_eq:"${v.intervalSec}"}
+    venueId:{_eq:"${venueId}"}, asset:{_eq:"${v.asset}"}, intervalSec:{_eq:"${v.intervalSec}"}
   }, order_by:{tradingStart:desc}, limit:1){ tradingStart } }`);
   const newest = d.Market[0];
   if (!newest) return false;
@@ -117,11 +132,12 @@ export async function venueIsLive(v: Venue): Promise<boolean> {
 
 /** Real on-chain settlement references: the opening price of each rolled Window. */
 export async function rollPriceSeries(v: Venue, sinceSec: number): Promise<{ t: number; price: number }[]> {
+  const venueId = await resolveVenueId(v);
   const d = await gql<{ Market: { tradingStart: string; question: string; strike: string; marketId: string }[] }>(
     // Newest first, then reversed. Ascending with a limit takes the OLDEST 400 rows,
     // which on a 60-second series is under seven hours starting from `since` — so a
     // long horizon charted a window of history that ended a day ago.
-    `{ Market(where:{venueId:{_eq:"${v.venueId}"}, asset:{_eq:"${v.asset}"},
+    `{ Market(where:{venueId:{_eq:"${venueId}"}, asset:{_eq:"${v.asset}"},
         intervalSec:{_eq:"${v.intervalSec}"}, tradingStart:{_gt:"${sinceSec}"}},
         order_by:{tradingStart:desc}, limit:400){ tradingStart question strike marketId } }`);
   /**
@@ -205,6 +221,16 @@ export interface BuiltPlan {
   commit: (market: LiveMarket) => BatchCall;
   /** The atomic pair, for a wallet that can actually batch. */
   calls: BatchCall[];
+  /** The venue's fee schedule as the registry reports it, or null if it has no row. */
+  fees: VenueFees | null;
+  /**
+   * A sentence to show the user when the venue has stopped being free.
+   *
+   * Null in every case measured so far, which is exactly why it is read rather
+   * than assumed: the day it is not null, every payout already on screen is an
+   * overstatement.
+   */
+  feeNotice: string | null;
 }
 
 /**
@@ -243,6 +269,28 @@ export async function buildCommitFromLegs(
   const market = await liveMarket(v, 32, 3, legs[0].direction === "UP");
   if (!market) throw new Error("no tradeable window for the first leg — try again in a moment");
 
+  /**
+   * THE STAKES WERE SIZED IN THE VENUE'S SCALE. Check the market agrees before
+   * any of them is signed for.
+   *
+   * A stake is a `uint96` of collateral base units, so it only means what it is
+   * meant to mean if the market settles at the number of decimals the venue
+   * declared. Get that wrong and nothing reverts — the Plan simply stakes
+   * 10^12 times too much or too little. Refusing is correct here: there is no
+   * safe way to guess which of the two numbers is the real one, and both live
+   * venues have agreed on every read.
+   */
+  if (market.quoteDecimals !== v.quoteDecimals) {
+    throw new Error(
+      `venue ${v.key} is configured for ${v.quoteDecimals}dp collateral but its live market ` +
+      `settles in ${market.quoteDecimals}dp — refusing to size a stake against a scale that moved`);
+  }
+
+  // Read the fee schedule rather than assuming the zeros the docs promise.
+  const fees = await venueFees(await resolveVenueId(v));
+  const notice = feeNotice(fees);
+  if (notice) console.warn(`[kurvv] ${notice}`);
+
   const approve: BatchCall = {
     to: ADDR.tusdc as Address, value: 0n,
     data: encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [book, total] }),
@@ -256,5 +304,5 @@ export async function buildCommitFromLegs(
     }, legs.map((l) => (l.direction === "UP" ? 0 : 1)), legs.map((l) => l.stake)] }),
   });
 
-  return { legs, total, market, approve, commit, calls: [approve, commit(market)] };
+  return { legs, total, market, approve, commit, calls: [approve, commit(market)], fees, feeNotice: notice };
 }

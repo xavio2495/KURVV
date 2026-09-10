@@ -1,4 +1,5 @@
 import { INDEXER, type Venue } from "./venues.ts";
+import { resolveVenueId } from "./registry.ts";
 import { type PixelCells } from "./pixel.ts";
 
 /**
@@ -49,7 +50,8 @@ const STRIKE_SCALE = 100;
  * price did and what each Window paid. No wallet, no transaction, no chain write.
  */
 export async function refSeries(v: Venue, limit = 24): Promise<RefWindow[]> {
-  const q = `{ Market(where:{venueId:{_eq:"${v.venueId}"}, asset:{_eq:"${v.asset}"},
+  const venueId = await resolveVenueId(v);
+  const q = `{ Market(where:{venueId:{_eq:"${venueId}"}, asset:{_eq:"${v.asset}"},
       intervalSec:{_eq:"${v.intervalSec}"}, marketType:{_eq:"BINARY"}},
       order_by:{expiry:desc}, limit:${Math.max(1, Math.min(limit, 200))}){
       tradingStart expiry strike winningOutcome voided } }`;
