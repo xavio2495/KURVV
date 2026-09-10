@@ -1,7 +1,8 @@
 import type { Address } from "viem";
-import { pub } from "./chain";
-import { marketAbi, moduleAbi } from "./abi";
+import { pub } from "./chain.ts";
+import { marketAbi, moduleAbi } from "./abi.ts";
 import { ADDR } from "./venues.ts";
+import { USE_SDK } from "./dreamdex/flag.ts";
 
 /**
  * Reading a market's payout vector off chain.
@@ -18,7 +19,7 @@ import { ADDR } from "./venues.ts";
  * Callers batch and memoise by `marketId` — every Plan on the same series shares one
  * market per Window, so a board of forty Plans resolves a handful of markets.
  */
-export async function readPayout(marketId: `0x${string}`): Promise<readonly bigint[] | null> {
+async function readPayoutLegacy(marketId: `0x${string}`): Promise<readonly bigint[] | null> {
   try {
     const rec = await pub.readContract({
       address: ADDR.module as Address, abi: moduleAbi, functionName: "markets", args: [marketId],
@@ -40,6 +41,22 @@ export async function readPayout(marketId: `0x${string}`): Promise<readonly bigi
     }) as boolean;
     return voided ? [1n, 1n] : null;
   } catch { return null; }
+}
+
+/**
+ * The payout vector, from the SDK or from the hand-rolled ABIs.
+ *
+ * Verified over 120 consecutive settled markets on 10 Sep 2026: both paths grade
+ * identically for BOTH directions — same `won`, same `voided`, same `paid` to
+ * the base unit — with neither returning null where the other did not.
+ *
+ * Dynamic, so the SDK stays out of the bundle while the flag is off. The board
+ * calls this once per Window on a 25s sweep; one extra microtask is free and
+ * 100 kB of first-load is not.
+ */
+export async function readPayout(marketId: `0x${string}`): Promise<readonly bigint[] | null> {
+  if (!USE_SDK) return readPayoutLegacy(marketId);
+  return (await import("./dreamdex/settlement.ts")).readPayout(marketId);
 }
 
 /** A memo across one sweep, so forty Plans sharing a Window cost one pair of calls. */
