@@ -1,10 +1,12 @@
 import { encodeFunctionData, type Address } from "viem";
-import { binaryPoolAbi, erc20Abi, planBookAbi } from "./abi";
-import { ADDR, INDEXER, type Venue } from "./venues";
+import { erc20Abi, planBookAbi } from "./abi.ts";
+import { ADDR, INDEXER, type Venue } from "./venues.ts";
 import { feeNotice, resolveVenueId, venueFees, type VenueFees } from "./registry.ts";
-import { pub } from "./chain";
-import { curveToPlan, type CurvePoint, type Leg } from "./curve";
-import type { BatchCall } from "./wallet/types";
+import { USE_SDK } from "./dreamdex/flag.ts";
+import { sideHasDepth } from "./dreamdex/book.ts";
+import { pub } from "./chain.ts";
+import { curveToPlan, type CurvePoint, type Leg } from "./curve.ts";
+import type { BatchCall } from "./wallet/types.ts";
 
 export const PLAN_BOOK = (process.env.NEXT_PUBLIC_PLAN_BOOK ?? "") as Address;
 
@@ -41,7 +43,7 @@ async function gql<T>(query: string): Promise<T> {
  * briefly invisible while the predecessor has already expired. On a 60s Window that
  * blind spot is a real fraction of the cycle — retry rather than fail.
  */
-export async function liveMarket(
+async function liveMarketLegacy(
   v: Venue, tries = 32, marginSec = 3, needUp?: boolean,
 ): Promise<LiveMarket | null> {
   for (let i = 0; i < tries; i++) {
@@ -119,7 +121,7 @@ export async function liveMarket(
  * Two intervals of slack absorbs the roll drift the indexer shows (898s and 3598s
  * windows) without letting a genuinely stopped series look alive for long.
  */
-export async function venueIsLive(v: Venue): Promise<boolean> {
+async function venueIsLiveLegacy(v: Venue): Promise<boolean> {
   const venueId = await resolveVenueId(v);
   const d = await gql<{ Market: { tradingStart: string }[] }>(`{ Market(where:{
     venueId:{_eq:"${venueId}"}, asset:{_eq:"${v.asset}"}, intervalSec:{_eq:"${v.intervalSec}"}
@@ -171,32 +173,40 @@ export async function rollPriceSeries(v: Venue, sinceSec: number): Promise<{ t: 
 }
 
 /**
- * Does the side of the book this Leg has to take actually have a quote on it?
+ * Window discovery — legacy GraphQL or the SDK, chosen by flag.
  *
- * NOT A TIMING QUESTION, which is why it is a separate check from the age bounds in
- * `liveMarket`. Measured on the 60s BTC venue: when a Window prices near an extreme
- * the maker quotes ONE SIDE ONLY. One observed Window sat at `bid = 0.980` with an
- * EMPTY ask from age 23s until it expired — an UP Leg lifts the ask, so it could
- * never have filled there no matter when it arrived. `_openLeg` reads exactly this
- * and skips with `NoLiquidity`, and that skip consumes the Leg, so the cheap fix is
- * to ask the same question before committing rather than pay for the answer.
- *
- * A read, not a guarantee: the maker can pull between here and the block. It removes
- * the deterministic case, not the race.
+ * The exported names are unchanged so `usePlan`, `useWindowClock`, the play page
+ * and `DeviceStage` are untouched by the swap. That is the point: the migration
+ * step is one boolean wide, and reverting it is one boolean wide too.
  */
-export async function sideHasDepth(pool: Address, up: boolean): Promise<boolean> {
-  try {
-    const levels = await pub.readContract({
-      address: pool, abi: binaryPoolAbi, functionName: "getBookLevels",
-      // `!up` mirrors `PlanBook._openLeg`: BUY_YES lifts the ask, BUY_NO the bid.
-      args: [!up, 1n],
-    });
-    return levels.length > 0 && levels[0].price > 0n;
-  } catch {
-    // An unreadable pool is not a reason to block a commit — the contract re-checks.
-    return true;
-  }
+/**
+ * IMPORTED DYNAMICALLY, and that is not a micro-optimisation.
+ *
+ * Pulling `dreamdex/markets` in statically put the whole SDK — and the wallet
+ * stack it carries — into /play's first load: 402 kB to 504 kB, measured. None
+ * of it is needed to render the device or run the canvas; it is needed the
+ * moment someone goes looking for a Window. So it loads then.
+ *
+ * It also makes the flag genuinely free while it is off, which is what lets this
+ * step be reverted by flipping one boolean rather than by reverting a commit.
+ */
+async function viaSdk() {
+  return import("./dreamdex/markets.ts");
 }
+
+export async function liveMarket(
+  v: Venue, tries = 32, marginSec = 3, needUp?: boolean,
+): Promise<LiveMarket | null> {
+  if (!USE_SDK) return liveMarketLegacy(v, tries, marginSec, needUp);
+  return (await viaSdk()).liveMarket(v, tries, marginSec, needUp);
+}
+
+export async function venueIsLive(v: Venue): Promise<boolean> {
+  if (!USE_SDK) return venueIsLiveLegacy(v);
+  return (await viaSdk()).venueIsLive(v);
+}
+
+export { sideHasDepth };
 
 export interface BuiltPlan {
   legs: Leg[];
