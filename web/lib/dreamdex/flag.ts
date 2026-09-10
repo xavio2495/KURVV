@@ -11,10 +11,8 @@
 /**
  * Route discovery through the SDK instead of the hand-written GraphQL.
  *
- * OFF BY DEFAULT while the two paths are being compared. Every step of the
- * migration is meant to be independently revertible, and a flag is the cheapest
- * revert there is — the harness in `scripts/` runs both paths against the same
- * instant and diffs the Window they choose, which is only possible while both
- * exist.
+ * ON BY DEFAULT since 10 Sep 2026, after both paths were compared live and
+ * agreed. The legacy path stays as the revert: set `NEXT_PUBLIC_DREAMDEX_SDK=0`
+ * to fall back to it without touching code.
  */
-export const USE_SDK = process.env.NEXT_PUBLIC_DREAMDEX_SDK === "1";
+export const USE_SDK = process.env.NEXT_PUBLIC_DREAMDEX_SDK !== "0";

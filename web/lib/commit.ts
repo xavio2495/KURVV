@@ -4,7 +4,6 @@ import { ADDR, INDEXER, type Venue } from "./venues.ts";
 import { feeNotice, resolveVenueId, venueFees, type VenueFees } from "./registry.ts";
 import { USE_SDK } from "./dreamdex/flag.ts";
 import { sideHasDepth } from "./dreamdex/book.ts";
-import { pub } from "./chain.ts";
 import { curveToPlan, type CurvePoint, type Leg } from "./curve.ts";
 import type { BatchCall } from "./wallet/types.ts";
 
