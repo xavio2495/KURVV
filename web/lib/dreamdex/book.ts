@@ -2,7 +2,6 @@ import type { Address } from "viem";
 import { binaryPoolAbi } from "../abi.ts";
 import { pub } from "../chain.ts";
 import { USE_SDK } from "./flag.ts";
-import { sdk } from "./client.ts";
 
 /**
  * The order-book pre-flight.
@@ -59,6 +58,10 @@ async function sideHasDepthLegacy(pool: Address, up: boolean): Promise<boolean> 
  */
 async function sideHasDepthSdk(pool: Address, up: boolean): Promise<boolean> {
   try {
+    // Imported here, not at module scope: `commit.ts` pulls this file in on the
+    // legacy path too, so a static import would put the whole SDK back into
+    // /play's first load — measured at 504 kB against a 402 kB baseline.
+    const { sdk } = await import("./client.ts");
     const book = await sdk().getBinaryOrderBook(pool, { depth: 1 });
     // BUY_YES lifts the ask; BUY_NO works down from the YES bid.
     const side = up ? book.yesAsks : book.yesBids;
