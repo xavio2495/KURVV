@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { MenuRow } from "./gb";
 import { SKINS, type Skin } from "./skins";
+import { fmtUsdc } from "./units.ts";
 import { ASSETS, windowsFor } from "./venues";
 import { HANDLE_VARIANTS, handleFor, readHandleVariant, writeHandleVariant } from "./handle";
 import type { DeviceId } from "./three/device";
@@ -132,7 +133,7 @@ export function useDeviceMenu(
     { id: "wallet", label: "WALLET", value: hooks.walletLabel ?? (connected ? "LINKED" : "CONNECT"), editable: false },
     // Only once there is an address to derive it from; an unconnected name is a lie.
     ...(handle ? [{ id: "name" as const, label: "NAME", value: handle.toUpperCase(), editable: true }] : []),
-    { id: "stake", label: "STAKE", value: `$${(Number(opts.stakes[stakeIndex]) / 1e6).toFixed(2)}`, editable: true },
+    { id: "stake", label: "STAKE", value: `$${fmtUsdc(opts.stakes[stakeIndex], 2)}`, editable: true },
     { id: "legs", label: "LEGS", value: String(legs), editable: true },
     { id: "window", label: "WINDOW", value: windowChoices[window_], editable: true },
     { id: "token", label: "TOKEN", value: opts.tokenChoices[tokenIndex], editable: true },
@@ -211,7 +212,7 @@ export function useDeviceMenu(
     switch (rows[i]?.id) {
       case "name": return Array.from({ length: HANDLE_VARIANTS }, (_, v) =>
         (address ? handleFor(address, v) : "").toUpperCase());
-      case "stake": return opts.stakes.map((v) => `$${(Number(v) / 1e6).toFixed(2)}`);
+      case "stake": return opts.stakes.map((v) => `$${fmtUsdc(v, 2)}`);
       case "legs": return opts.legChoices.map(String);
       case "window": return windowChoices;
       case "token": return opts.tokenChoices;

@@ -137,6 +137,8 @@ export interface Device3DProps {
   /** Wallet balance and committed stake, for the play readout on the second screen. */
   balance?: bigint | null;
   stake?: bigint;
+  /** The scale `balance` and `stake` are quoted in — a venue property, not a network one. */
+  quoteDecimals?: number;
   /**
    * Where the roller currently sits in its run, and how long that run is. The detent
    * click is pitched from this, so the ear knows which end of the range it is at.
@@ -670,6 +672,7 @@ export function Device3D(props: Device3DProps) {
           score: p.mode === "flappy" ? (p.score ?? null) : null,
           balance: p.balance ?? null,
           stake: p.stake,
+          quoteDecimals: p.quoteDecimals,
           venueLive: p.venueLive ?? null,
           plan,
         });

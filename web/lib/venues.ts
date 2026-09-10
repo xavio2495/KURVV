@@ -13,7 +13,27 @@ export interface Venue {
   openDelay: number;
   /** Refuse to open into the tail of a Window; the maker pulls quotes near expiry. */
   minHeadroom: number;
+  /**
+   * The collateral's scale ON THIS VENUE. Declared, then VERIFIED against the
+   * market row before anything is signed — see `assertQuoteDecimals`.
+   *
+   * NOT A NETWORK PROPERTY. It reads like one because every venue KURVV trades
+   * settles in 6dp tUSDC, but a third binary venue (`0x9f06b6a2…`, 120s BTC) has
+   * been live on Shannon since early September settling in an 18-decimal token.
+   * Read as 6dp, one of its trades records a price of 450 billion. That is the
+   * same factor-of-10^12 trap the mainnet USDso migration carries, arriving a
+   * network early — and it is why nothing below is allowed to say `1e6`.
+   */
+  quoteDecimals: number;
 }
+
+/**
+ * The scale to assume before a market row has been read.
+ *
+ * The ONE place in the frontend permitted to name a decimal count. Everything
+ * else derives from the venue, and the venue is checked against the chain.
+ */
+export const DEFAULT_QUOTE_DECIMALS = 6;
 
 export const ASSETS = ["BTC", "ETH", "SOMI"] as const;
 export type Asset = (typeof ASSETS)[number];
@@ -44,21 +64,36 @@ export type Asset = (typeof ASSETS)[number];
  * The series numbers were read off `SeriesRolled` logs rather than assumed. Odd is
  * BTC, even is ETH, and the pairing is per-creator, not global.
  */
+/**
+ * `venueId` here is a SEED, not an authority.
+ *
+ * The ids moved three times in the first week of August, and the one dreamDEX's
+ * own bot kit documents as *the* testnet venue holds 16 of the last 1,000
+ * markets. `marketCreator` is the permanent thing — the protocol says so — so
+ * `resolveVenueId` in `registry.ts` reads the live id off the newest market that
+ * creator rolled and these constants are the offline fallback. Both were
+ * verified to agree on 10 Sep 2026.
+ */
 const SHELL = {
   fast: {
     venueId: "0x1a1e6821cde7d0159c0d293177871e09677b4e42307c7db3ba94f8648a5a050f",
     marketCreator: "0xee3aff92812a2cb7bf801b500687bc97b55cab34",
     rollTopic: "0x2aba9c4149d9b680f88b57880776a6aa9755ec19e418a1e64831b44c43cb7a1b",
+    quoteDecimals: 6,
   },
   rolling: {
     venueId: "0x679795a0195a1b76cdebb7c51d74e058aee92919b8c3389af86ef24535e8a28c",
     marketCreator: "0x94d963b6670ab96e78c8d0c46ca35d196d606efe",
     rollTopic: "0x2f81a5d8c4d5d43e0ba57b7ee38e6a5ac6799dd18f58f377d1fc8359d6a27eee",
+    quoteDecimals: 6,
   },
   somi: {
     venueId: "0xd5fc2dc5e0133842011dfc657ce39cb3a4534f4fc368e23af5b23594eeeac6d7",
     marketCreator: "0xe207b1fa953b2e18ef46879555946cb5fa7ce74e",
     rollTopic: "0x2f81a5d8c4d5d43e0ba57b7ee38e6a5ac6799dd18f58f377d1fc8359d6a27eee",
+    // Declared by the series registry, never observed: this creator has not rolled
+    // a market. The verification path will correct it the day it does.
+    quoteDecimals: 6,
   },
 } as const;
 

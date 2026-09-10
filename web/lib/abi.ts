@@ -53,6 +53,19 @@ export const planBookAbi = [
   { type: "event", name: "PlanCancelled", inputs: [{ name: "planId", type: "uint256", indexed: true }, { name: "refunded", type: "uint96" }] },
 ] as const;
 
+/**
+ * `PlanBook.ONE` — the contract's fixed-point scale.
+ *
+ * NOT a display decimal count, which is why it does not come from the venue.
+ * `entryPrice` is a PROBABILITY: `_openLeg` computes it as `spent * ONE / got`,
+ * so its scale is the contract's constant and nothing else. It stays 6 for as
+ * long as `PlanBook` reverts `UnexpectedDecimals` on anything but 6dp
+ * collateral at construction (`PlanBook.sol:200`) — a loud failure, unlike the
+ * silent one `fmtUnits` exists to prevent. If that constraint is ever lifted,
+ * this must be read from the deployment rather than pinned here.
+ */
+export const PLANBOOK_ONE = 1_000_000;
+
 export const SKIP_REASON = [
   "None", "WrongEmitter", "WrongTopic", "WrongSeries", "PlanNotLive", "PlanComplete",
   "MarketNotTrading", "WindowTooShort", "NoLiquidity", "StakeTooSmall", "DryRun",

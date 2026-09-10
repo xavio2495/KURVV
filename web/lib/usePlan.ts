@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { decodeEventLog, encodeFunctionData, type Address, type Hex } from "viem";
 import { pub } from "./chain";
-import { erc20Abi, planBookAbi } from "./abi";
+import { erc20Abi, planBookAbi, PLANBOOK_ONE } from "./abi";
 import { buildCommit, buildCommitFromLegs, liveMarket, PLAN_BOOK, type BuiltPlan } from "./commit";
 import { ADDR, EXPLORER, type Venue } from "./venues";
 import { gradeVector } from "./outcome";
@@ -278,7 +278,7 @@ export function usePlan(venue: Venue): PlanState {
               : o.voided ? "void" : o.won ? "won" : "lost",
             stake: l.stake, start, end: start + venue.intervalSec,
             paid: o ? o.paid : undefined,
-            entryPrice: l.entryPrice ? l.entryPrice / 1e6 : undefined,
+            entryPrice: l.entryPrice ? l.entryPrice / PLANBOOK_ONE : undefined,
           };
         });
         if (!stop) { legsRef.current = out; setLegs(out); }

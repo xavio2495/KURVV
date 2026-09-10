@@ -1,6 +1,8 @@
 import { decodeEventLog, type Address, type Hex, type Log } from "viem";
 import { pub } from "./chain";
-import { planBookAbi, SKIP_REASON } from "./abi";
+import { fmtUnits } from "./units.ts";
+import { PLANBOOK_ONE, planBookAbi, SKIP_REASON } from "./abi";
+import { DEFAULT_QUOTE_DECIMALS } from "./venues.ts";
 
 /**
  * PROOF OF AUTONOMY — the read side.
@@ -109,7 +111,10 @@ function decode(log: Log): FireEvent | null {
   }
 }
 
-const usdc = (v: bigint) => (Number(v) / 1e6).toFixed(3);
+// The fire log is venue-agnostic — it decodes PlanBook events without a Venue in
+// scope — so it formats at the scale PlanBook itself enforces (6dp, or it will
+// not deploy). Anything that DOES know its venue must pass `quoteDecimals`.
+const usdc = (v: bigint) => fmtUnits(v, DEFAULT_QUOTE_DECIMALS, 3);
 
 function summarise(events: FireEvent[], planId: number): string {
   const parts: string[] = [];
@@ -120,7 +125,7 @@ function summarise(events: FireEvent[], planId: number): string {
         parts.push(`settled Leg ${e.legIndex}${e.paidToOwner !== undefined && e.paidToOwner > 0n ? ` +${usdc(e.paidToOwner)}` : " +0.000"}`);
         break;
       case "LegOpened":
-        parts.push(`opened Leg ${e.legIndex}${e.entryPrice !== undefined && e.entryPrice > 0n ? ` @ ${(Number(e.entryPrice) / 1e6).toFixed(3)}` : ""}`);
+        parts.push(`opened Leg ${e.legIndex}${e.entryPrice !== undefined && e.entryPrice > 0n ? ` @ ${(Number(e.entryPrice) / PLANBOOK_ONE).toFixed(3)}` : ""}`);
         break;
       case "LegSkipped":
         parts.push(`Leg ${e.legIndex} skipped · ${SKIP_REASON[e.reason ?? 0] ?? e.reason}`);

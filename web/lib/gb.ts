@@ -93,6 +93,9 @@ export interface MenuRow {
 }
 
 /** Everything the panel needs to draw itself. Read once per frame, never stored. */
+import { fmtUnits } from "./units.ts";
+import { DEFAULT_QUOTE_DECIMALS } from "./venues.ts";
+
 export interface GbState {
   showChart: boolean;
   points: { t: number; price: number }[];
@@ -123,6 +126,15 @@ export interface GbState {
   score?: { hit: number; resolved: number; placed: number } | null;
   /** Wallet balance in collateral base units, shown while playing. */
   balance?: bigint | null;
+  /**
+   * The scale `balance` and every Leg stake are quoted in.
+   *
+   * Passed in rather than assumed: decimals are a property of the VENUE, not of
+   * the network, and a renderer that hard-codes 6 draws a confident wrong number
+   * on any venue that does not agree. Defaults only so an unwired caller still
+   * renders.
+   */
+  quoteDecimals?: number;
   /** Total stake the Plan will commit, in base units. */
   stake?: bigint;
   /**
@@ -297,7 +309,7 @@ export function drawGb(g: CanvasRenderingContext2D, s: GbState) {
     // is the one thing the player has going that none of those show.
     text(g, "BETS", 4 * U, 14 * U, GB.darkest, true);
     const staked = (s.plan ?? []).reduce((a, l) => a + l.stake, 0n);
-    const money = `$${(Number(staked) / 1e6).toFixed(2)}`;
+    const money = `$${fmtUnits(staked, s.quoteDecimals ?? DEFAULT_QUOTE_DECIMALS, 2)}`;
     text(g, money, GB_W - 5 * U - money.length * 6.7 * U, 14 * U, GB.dark, true);
 
     // WHAT IT COSTS AND WHAT IS LEFT, on the same line.
@@ -308,7 +320,7 @@ export function drawGb(g: CanvasRenderingContext2D, s: GbState) {
     // this", and the answer that did exist was outside the object the user is
     // holding. Both numbers belong to the same decision, so they sit together.
     const bal = s.balance === null || s.balance === undefined
-      ? "----" : (Number(s.balance) / 1e6).toFixed(2);
+      ? "----" : fmtUnits(s.balance, s.quoteDecimals ?? DEFAULT_QUOTE_DECIMALS, 2);
     text(g, `staked of $${bal}`, 4 * U, 23 * U, GB.dark);
 
     betChart(g, s, 34 * U, GB_H - MODE_H - 52 * U);
@@ -343,7 +355,7 @@ export function drawGb(g: CanvasRenderingContext2D, s: GbState) {
    */
   if (s.playing) {
     const money = (v: bigint | null | undefined, dp = 2) =>
-      v === null || v === undefined ? "----" : (Number(v) / 1e6).toFixed(dp);
+      v === null || v === undefined ? "----" : fmtUnits(v, s.quoteDecimals ?? DEFAULT_QUOTE_DECIMALS, dp);
 
     const big = (label: string, value: string, y: number, invert = false) => {
       if (invert) fill(g, 2 * U, y - 2 * U, GB_W - 4 * U, 22 * U, GB.light);
