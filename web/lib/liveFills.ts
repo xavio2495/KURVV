@@ -1,5 +1,6 @@
-import { INDEXER } from "./venues";
-import { spotMarket } from "./priceSeries";
+import { INDEXER } from "./venues.ts";
+import { spotMarket } from "./priceSeries.ts";
+import { USE_SDK } from "./dreamdex/flag.ts";
 
 /**
  * THE PRICE FEED, PUSHED RATHER THAN POLLED.
@@ -31,7 +32,7 @@ export interface LiveFills {
   close: () => void;
 }
 
-export function subscribeFills(
+function subscribeFillsLegacy(
   asset: string,
   onPoints: (pts: { t: number; price: number }[]) => void,
 ): LiveFills {
@@ -108,5 +109,39 @@ export function subscribeFills(
       try { ws?.close(); } catch { /* already gone */ }
       ws = null;
     },
+  };
+}
+
+/**
+ * The pushed feed — the SDK's live tail or this file's own socket.
+ *
+ * The SDK path streams the oracle feed over the socket the client singleton
+ * already owns, so it removes a second socket rather than adding one. Both
+ * satisfy the same contract, and the caller's poll fallback is unchanged either
+ * way: `connected()` is the only thing it asks.
+ *
+ * The handle has to exist synchronously, so the SDK path returns immediately and
+ * reports `connected() === false` until its watch is hydrated — which is exactly
+ * how the legacy socket behaves before its `connection_ack`.
+ */
+export function subscribeFills(
+  asset: string,
+  onPoints: (pts: { t: number; price: number }[]) => void,
+): LiveFills {
+  if (!USE_SDK) return subscribeFillsLegacy(asset, onPoints);
+
+  // The module is loaded lazily, so the handle is a shell that forwards once the
+  // real one exists. Returning a Promise instead would change the contract and
+  // push async into the render path for no gain.
+  let inner: LiveFills | null = null;
+  let closed = false;
+  void import("./dreamdex/live.ts").then(({ subscribeTicks }) => {
+    if (closed) return;
+    inner = subscribeTicks(asset, onPoints);
+  }).catch(() => { /* stays disconnected; the caller's interval carries it */ });
+
+  return {
+    connected: () => !closed && !!inner?.connected(),
+    close: () => { closed = true; inner?.close(); inner = null; },
   };
 }
