@@ -1,4 +1,5 @@
-import { INDEXER, venueOf, type Venue } from "./venues";
+import { INDEXER, venueOf, type Venue } from "./venues.ts";
+import { USE_SDK } from "./dreamdex/flag.ts";
 
 /**
  * A dense BTC price series, every point a real on-chain observation.
@@ -95,7 +96,7 @@ export function spotMarket(asset: string): Promise<SpotMarket | null> {
  * empty array rather than throwing when the market or the indexer is unavailable
  * — the caller keeps its last good series on screen.
  */
-export async function densePriceSeries(
+async function densePriceSeriesLegacy(
   venueKey: Venue["key"],
   sinceSec: number,
 ): Promise<{ t: number; price: number }[]> {
@@ -128,4 +129,21 @@ export async function densePriceSeries(
     else { out.push({ t, price }); lastT = t; }
   }
   return out;
+}
+
+/**
+ * The series, from the protocol's price feed or from spot fills.
+ *
+ * Measured over an hour of BTC on 10 Sep 2026: the feed gives 57.62 points a
+ * minute against 5.48 here, with a median gap of 1s against 10s, and the two
+ * agree on level to a median of 1.00 bps. See `dreamdex/price.ts` for the full
+ * comparison and why the feed is the more correct source as well as the denser
+ * one.
+ */
+export async function densePriceSeries(
+  venueKey: Venue["key"],
+  sinceSec: number,
+): Promise<{ t: number; price: number }[]> {
+  if (!USE_SDK) return densePriceSeriesLegacy(venueKey, sinceSec);
+  return (await import("./dreamdex/price.ts")).densePriceSeries(venueKey, sinceSec);
 }
