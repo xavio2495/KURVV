@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { decodeEventLog, encodeFunctionData, type Address, type Hex } from "viem";
 import { pub } from "./chain";
-import { erc20Abi, planBookAbi } from "./abi";
+import { erc20Abi, planBookAbi, PLANBOOK_ONE } from "./abi";
 import { buildCommit, buildCommitFromLegs, liveMarket, PLAN_BOOK, type BuiltPlan } from "./commit";
 import { ADDR, EXPLORER, type Venue } from "./venues";
 import { gradeVector } from "./outcome";
@@ -278,7 +278,7 @@ export function usePlan(venue: Venue): PlanState {
               : o.voided ? "void" : o.won ? "won" : "lost",
             stake: l.stake, start, end: start + venue.intervalSec,
             paid: o ? o.paid : undefined,
-            entryPrice: l.entryPrice ? l.entryPrice / 1e6 : undefined,
+            entryPrice: l.entryPrice ? l.entryPrice / PLANBOOK_ONE : undefined,
           };
         });
         if (!stop) { legsRef.current = out; setLegs(out); }
@@ -349,6 +349,10 @@ export function usePlan(venue: Venue): PlanState {
       setBusy("Finding the live Window…");
       const built = await buildCommit(toPoints(curve), v, legCount, total);
       await send(built, v, total, { curve, legCount });
+      // Shown once the commit's own status clears. Null on every venue measured
+      // so far — see `feeNotice`; it exists so a fee that appears is visible
+      // rather than quietly baked into a payout the user already read.
+      if (built.feeNotice) setErr(built.feeNotice);
     } catch (e) {
       setErr((e as Error).message.split("\n").slice(0, 2).join(" "));
     } finally { setBusy(null); }
@@ -371,6 +375,7 @@ export function usePlan(venue: Venue): PlanState {
       setBusy("Finding the live Window…");
       const built = await buildCommitFromLegs(legs, v, total);
       await send(built, v, total, { curve: [], legCount: legs.length, cells });
+      if (built.feeNotice) setErr(built.feeNotice);
     } catch (e) {
       setErr((e as Error).message.split("\n").slice(0, 2).join(" "));
     } finally { setBusy(null); }

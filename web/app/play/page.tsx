@@ -473,7 +473,7 @@ export default function Play() {
         planStartRef={plan.planStartRef} planId={plan.planId}
         horizonSec={horizon} onStrokeEnd={onStrokeEnd}
         onLegs={setLegCount} onVenue={setVenueKey} onStake={setStakeIndex}
-        plan={preview ?? undefined} venueLive={venueLive}
+        plan={preview ?? undefined} venueLive={venueLive} quoteDecimals={venue.quoteDecimals}
         gates={flappy.view} onStartRun={flappy.start} score={mode === "flappy" ? flappy.score : null}
         flappyUnsupported={mode === "flappy" && flappy.unsupported}
         onFlap={flappy.running ? flappy.tap : null}

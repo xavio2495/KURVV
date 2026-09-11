@@ -10,4 +10,6 @@ export const shannon = defineChain({
 
 export const pub = createPublicClient({ chain: shannon, transport: http() });
 
-export const fmtUsdc = (v: bigint, dp = 4) => (Number(v) / 1e6).toFixed(dp);
+// Amount formatting lives in `units.ts` so the canvas renderer can import it
+// without dragging a public client along. Re-exported for existing callers.
+export { fmtUnits, fmtUsdc } from "./units.ts";

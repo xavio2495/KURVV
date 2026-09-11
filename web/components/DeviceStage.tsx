@@ -61,6 +61,8 @@ interface Props {
   plan?: { direction: "UP" | "DOWN"; stake: bigint }[];
   /** Whether the selected venue has an open Window. `null` while unknown. */
   venueLive?: boolean | null;
+  /** The scale balances and stakes are quoted in — passed to the screen renderer. */
+  quoteDecimals?: number;
   /** Flappy mode: the normalised gates, and the run's input while one is sweeping. */
   gates?: FlappyView | null;
   /** The venue publishes no reference level, so a run cannot be anchored honestly. */
@@ -303,7 +305,7 @@ export function DeviceStage(p: Props) {
       horizonSec={p.horizonSec} legCount={menu.legs} asset={ASSETS[menu.tokenIndex]}
       mode={mode} screen={screen} drawArmed={armed && !p.inert}
       floatOnly={p.floatOnly} still={p.still} board={board.rows} boardSample={board.sample}
-      plan={p.plan} venueLive={p.venueLive ?? null}
+      plan={p.plan} venueLive={p.venueLive ?? null} quoteDecimals={p.quoteDecimals}
       fires={p.fires} fireState={p.fireState}
       gates={p.gates} onFlap={p.onFlap ?? null} score={p.score ?? null}
       flappyUnsupported={p.flappyUnsupported}
