@@ -88,7 +88,7 @@ So a line that crawls sideways and then rips upward puts almost nothing on the c
 
 You pick the total stake (0.50 to 10 tUSDC), how many rounds (2–8), and how long each round lasts (a minute, five minutes, or an hour). Six rounds of a minute each is a six-minute game.
 
-*(The console calls a round a **LEG** and a round length a **WINDOW**, which is what the settings screen says. Same thing.)*
+*(The console calls a round a **LEG** and a round length a **WINDOW**, which is what the settings screen says.)*
 
 ---
 
@@ -112,7 +112,7 @@ A bird flies along the real price, and each gate ahead of it is the next round. 
 
 Flying is practice — it replays rounds that already finished, with no wallet and nothing at stake. When you commit, the same calls are applied to the rounds that have *not* happened yet. The bird is animation; the result always comes from the settled outcome on chain.
 
-> Flappy needs a round that publishes a reference price, so it works on the one-minute and five-minute games and says so plainly on the hourly one.
+> Flappy needs a round that publishes a reference price, so it works on the one-minute and five-minute games.
 
 ---
 
@@ -197,12 +197,16 @@ sequenceDiagram
 
 Honestly: as safe as free test chips need to be, with the trade-off stated rather than buried.
 
-**The contract holds your stake while the run lasts.** It has to — the thing placing your bets is woken by validators and has no wallet of its own to spend from. In exchange there is no robot, no server and no key anywhere that can be stolen. What stops that from being a bad deal:
+**The contract never holds your stake.** It takes each round's money at the instant that round opens, and not a second earlier — so between rounds your chips sit in your own wallet, not ours.
 
-- **You approve the exact stake.** Never "unlimited" — the contract refuses anything but the precise total. Approve 2.00 and 2.00 is all it can ever touch.
-- **Calling off a run refunds the rest**, including when the chain has gone quiet — a stuck run is not a lost one.
+- **You approve the exact amount, once.** Never "unlimited". That approval is the only thing a run can ever draw on, and the contract refuses to start unless it matches to the penny.
+- **Calling off a run takes nothing back, because nothing was taken.** It just stops the remaining rounds drawing.
+- **A round that cannot be placed costs you nothing at all.** No quote on your side, or a window that closed too soon — your balance never moves.
+- **Change comes straight back.** If a bet uses 0.24794 of a 0.25 stake, the remainder returns in the same transaction.
 - **Anyone can trigger your payout, only you can receive it.** Even on a run that was called off or left for dead.
 - **Winnings arrive round by round**, not at the end.
+
+The contract does hold your winning tickets between a bet landing and its payout — unavoidable, since it bought them as itself. That is the entire remaining custody.
 
 ---
 
@@ -212,28 +216,32 @@ Two contracts, live on Shannon (chain `50312`).
 
 | Contract | Address | What it does |
 |---|---|---|
-| `PlanBook` | [`0x0ea0f0e3…9765a`](https://shannon-explorer.somnia.network/address/0x0ea0f0e3a7ebe5f91cb19be606c6114287d9765a) | Holds every run, gets woken by the validators, places and redeems each bet, pays you, and refunds if you call it off. One contract serves everybody — the 32-STT Reactivity requirement is a *balance to hold*, not a deposit, so it is paid once rather than per run. |
+| `PlanBook` | [`0xbd9477be…30187`](https://shannon-explorer.somnia.network/address/0xbd9477beda5464ed49a7c49d9c9e5651b4830187) | Keeps every run, gets woken by the validators, places and redeems each bet, and pays you. Holds no collateral at rest — each round's stake is pulled from your wallet as that round opens. One contract serves everybody: the 32-STT Reactivity requirement is a *balance to hold*, not a deposit. |
 | `BatchExecutor` | [`0x8aee0794…e5cd`](https://shannon-explorer.somnia.network/address/0x8aee0794ad361258422d96e70df13624fa92e5cd) | Makes "approve the stake" and "start the run" a single signature via EIP-7702. It has a `receive()` — a delegate without one strands native funds at the delegated account. |
 | tUSDC | [`0x70a86D88…25d8E`](https://shannon-explorer.somnia.network/address/0x70a86D8842FB63C4Ad2b7cdddF530eBf1BB25d8E) | The chips. 6 decimals, public `faucet(uint256)` capped at 10,000 a call. The venue's, not ours. |
 
-**A run that actually happened.** Run 18 — six one-off bets on BTC's five-minute rounds, from a line drawn flat and then sharply up. Read straight off the contract and graded against each market's official payout, not our own records:
+Previous contract: [Somnia testnet deployment](https://shannon-explorer.somnia.network/address/0x0ea0f0e3a7ebe5f91cb19be606c6114287d9765a), retired on 11 Sep when the contract above replaced it)
 
 | Round | Called | Stake | Ticket price | Tickets | Result |
 |---|---|---|---|---|---|
-| 1 | UP | 0.114433 | 0.853 | 0.133 | **won** +0.133 |
-| 2 | UP | 0.118478 | 0.737 | 0.159 | **won** +0.159 |
-| 3 | UP | 0.141475 | 0.692 | 0.203 | **won** +0.203 |
-| 4 | UP | 0.183422 | 0.723 | 0.252 | lost |
-| 5 | UP | 0.261273 | 0.623 | 0.416 | lost |
-| 6 | UP | 1.180919 | 0.432 | 2.708 | lost |
+| 1 | DOWN | 0.192993 | 0.320 | 0.595 | lost |
+| 2 | DOWN | 0.115934 | 0.336 | 0.340 | lost |
+| 3 | DOWN | 0.066198 | 0.304 | 0.214 | **won** +0.214 |
+| 4 | DOWN | 0.050518 | 0.406 | 0.123 | **won** +0.123 |
+| 5 | DOWN | 0.037135 | 0.598 | 0.061 | **won** +0.061 |
+| 6 | DOWN | 0.037222 | 0.908 | 0.040 | **won** +0.040 |
 
-Staked exactly **2.000000**, got back **0.495**. Look at the stake column: 5.7% on the flat opening and 59% on the final rise, decided by the drawn shape and not by hand. Run 17 staked 0.9 across three even bets, won all three and returned **1.654**; run 20 staked 2.000000 and returned **1.969**. Losing runs are in the list too, which is the point of publishing the list.
+Staked exactly **0.500000**, paid back **0.438000**. Look at the stake column: **39% of the whole run rode on the first round** and 7% on the last, because that is where the drawn line was steepest. Nobody typed those numbers — the shape did. (Won four of six and still finished down, which is what happens when the bets you win are the small ones.)
+
+Run 17 is the cheerful one: 0.9 staked across three even bets, all three won, **1.654** paid.
+
+**And on the contract above, the first round it ever ran:** a bet placed with nobody watching. The validators woke it ten seconds after the window rolled, it drew **0.24794** of that round's 0.25 stake and returned the 0.00206 of change in the same transaction, and the contract's collateral balance before and after was **zero**. That is the whole design in one transaction — nobody signed it, and nothing of the player's was ever held.
 
 **The rounds you can play:**
 
 | Round length | Assets | Notes |
 |---|---|---|
-| **1 minute** | BTC, ETH | **The one to watch** — a six-round game finishes in six minutes. Rolls back to back all day |
+| **1 minute** | BTC, ETH | a six-round game finishes in six minutes. Rolls back to back all day |
 | 5 minutes | BTC, ETH | Roomier; a round is open to new bets ~77% of the time |
 | 1 hour | BTC, ETH | Eight rounds is a working day |
 
