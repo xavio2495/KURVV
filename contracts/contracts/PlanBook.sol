@@ -27,10 +27,24 @@ import {
 ///         put `seriesId` in topic[1] and the successor `marketId` in topic[2], so
 ///         one filter shape serves both.
 ///
-///         CUSTODY. This contract holds each Plan's committed stake and places
-///         orders as itself — the operator path is protocol-gated and a Reactivity
-///         handler cannot sign as an EOA. Every stall is therefore a lockup, and
-///         every exit below works without the handler ever firing again.
+///         CUSTODY — NONE AT REST. This contract places orders as itself (the
+///         operator path is protocol-gated and a Reactivity handler cannot sign as
+///         an EOA), but it does NOT take the stake at commit. Each Leg's stake is
+///         pulled from the owner with `transferFrom` at the instant that Leg opens,
+///         and any part of it the fill did not consume goes straight back. A handler
+///         may do this because `msg.sender` is the precompile while `address(this)`
+///         is still PlanBook, so the owner's allowance is spendable from inside
+///         `_openLeg`.
+///
+///         The consequences are the point. A stall is no longer a lockup — there is
+///         nothing held to be locked. `cancelPlan` stops future draws rather than
+///         returning money. A skipped Leg costs nothing. Between a fill and its
+///         redemption the contract does hold that Leg's OUTCOME TOKENS, which is
+///         unavoidable: it bought them as itself.
+///
+///         The exact-approval rule survives and now carries the whole claim: the
+///         allowance is the ONLY thing a Plan can ever draw on, so it is checked to
+///         the unit at commit and tracked in `outstanding` across concurrent Plans.
 contract PlanBook is SomniaEventHandler {
     // ─────────────────────────────────────────────────────────────────────────
     // Domain model
@@ -94,7 +108,12 @@ contract PlanBook is SomniaEventHandler {
         OrderRejected,
         PredecessorUnresolved,
         NothingPending,
-        UnknownSchedule
+        UnknownSchedule,
+        /// @dev APPEND ONLY. The frontend maps these by index.
+        ///      The owner's allowance or balance could not cover this Leg's stake at
+        ///      open time — the cost of holding no custody. The Leg is skipped and
+        ///      the rest of the Plan continues.
+        StakeUnavailable
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -130,6 +149,16 @@ contract PlanBook is SomniaEventHandler {
     mapping(uint256 => Schedule) public schedules;
     mapping(uint256 => Leg[]) private _legs;
     mapping(address => bool) public poolApproved;
+
+    /// @notice Stake this owner's live Plans have not drawn yet, in collateral units.
+    /// @dev    THE REASON THIS EXISTS. Nothing is held, so a Plan's only claim on its
+    ///         owner is the ERC-20 allowance — and `approve` OVERWRITES rather than
+    ///         adds. Without this, committing a second Plan would set the allowance to
+    ///         that Plan's total and the first Plan's remaining Legs would quietly
+    ///         spend it. `commitPlan` therefore requires
+    ///         `allowance == newTotal + outstanding[owner]`, so concurrent Plans each
+    ///         keep exactly what they still need and no more.
+    mapping(address => uint256) public outstanding;
 
     /// @dev One roll subscription per (marketCreator, seriesId), shared by every Plan
     ///      on it. Sharing is both cheaper and CORRECT: with one subscription per
@@ -220,8 +249,12 @@ contract PlanBook is SomniaEventHandler {
     }
 
     /// @notice Commit a schedule, ensure the series is subscribed, and open Leg 0.
-    /// @dev    The caller must have approved EXACTLY the sum of `stakes`. Never max —
-    ///         an unlimited allowance would make our custody claim false.
+    /// @dev    The caller must have approved EXACTLY the sum of `stakes` PLUS anything
+    ///         their other live Plans have yet to draw. Never max — an unlimited
+    ///         allowance would make the custody claim false, and here it is the only
+    ///         thing standing between a Plan and the rest of the owner's balance.
+    ///         No collateral moves in this function; Leg 0's stake is pulled inside
+    ///         `_openLeg` like every other Leg's.
     function commitPlan(CommitParams calldata p, Dir[] calldata directions, uint96[] calldata stakes)
         external
         returns (uint256 planId)
@@ -244,9 +277,13 @@ contract PlanBook is SomniaEventHandler {
             );
         }
 
+        // EXACT, and inclusive of what this owner's other live Plans still need.
+        // Nothing is transferred here: each Leg pulls its own stake when it opens, so
+        // the allowance IS the custody boundary and must be right to the unit.
+        uint256 required = total + outstanding[msg.sender];
         uint256 allowed = COLLATERAL.allowance(msg.sender, address(this));
-        if (allowed != total) revert ApprovalMustBeExact(total, allowed);
-        COLLATERAL.transferFrom(msg.sender, address(this), total);
+        if (allowed != required) revert ApprovalMustBeExact(required, allowed);
+        outstanding[msg.sender] = required;
 
         schedules[planId] = Schedule({
             owner: msg.sender,
@@ -491,16 +528,27 @@ contract PlanBook is SomniaEventHandler {
             poolApproved[pool] = true;
         }
 
+        // THE MONEY MOVES HERE AND NOWHERE EARLIER. Every rejection above costs the
+        // owner nothing at all, because nothing of theirs has been touched yet.
+        if (!_pull(s.owner, leg.stake)) {
+            return _skip(planId, legIndex, Reason.StakeUnavailable);
+        }
+
         (,,,,,,,,,, uint256 yesId, uint256 noId,,) = MODULE.markets(marketId);
         uint256 tokenId = up ? yesId : noId;
         uint256 beforeTok = OUTCOME.balanceOf(address(this), tokenId);
+        // Read AFTER the pull, so `spent` below measures the order and not the pull.
         uint256 beforeCol = COLLATERAL.balanceOf(address(this));
 
         try IBinaryPool(pool).placeBinaryOrder(
             up ? KIND_BUY_YES : KIND_BUY_NO, price, qty, expNs, ORDER_TYPE_IOC, 0, address(0), 0, 0
         ) returns (bool, uint128) {
             uint256 got = OUTCOME.balanceOf(address(this), tokenId) - beforeTok;
-            if (got == 0) return _skip(planId, legIndex, Reason.NoLiquidity);
+            if (got == 0) {
+                // Filled nothing, so the stake was never spent — return all of it.
+                _refund(s.owner, leg.stake);
+                return _skip(planId, legIndex, Reason.NoLiquidity);
+            }
 
             // The ACTUAL fill price: what we were charged, divided by what we got.
             // A taker pays the resting price, not the limit it offered.
@@ -511,18 +559,52 @@ contract PlanBook is SomniaEventHandler {
             leg.marketId = marketId;
             leg.entryPrice = uint32(fill);
             leg.filled = uint128(got);
-            s.unspent -= leg.stake;
+            _release(planId, legIndex);
             s.cursor = legIndex + 1;
             emit LegOpened(planId, legIndex, marketId, fill, got);
+
+            // Lot rounding and a partial fill both leave change. It is the owner's,
+            // and holding it would rebuild the custody this design removes.
+            if (leg.stake > spent) _refund(s.owner, leg.stake - spent);
         } catch {
+            _refund(s.owner, leg.stake);
             return _skip(planId, legIndex, Reason.OrderRejected);
         }
+    }
+
+    /// @dev Pull one Leg's stake from its owner. False rather than revert: a Plan
+    ///      whose owner has spent or un-approved their balance must skip that Leg,
+    ///      not stall the shared handler for everyone else on the series.
+    function _pull(address from, uint96 amount) private returns (bool) {
+        try COLLATERAL.transferFrom(from, address(this), amount) returns (bool ok) {
+            return ok;
+        } catch {
+            return false;
+        }
+    }
+
+    /// @dev Hand back what the fill did not consume, immediately. Anything this misses
+    ///      would sit in the contract as untracked dust belonging to nobody.
+    function _refund(address to, uint256 amount) private {
+        if (amount > 0) COLLATERAL.transfer(to, amount);
+    }
+
+    /// @dev A skipped Leg will never be drawn, so it releases its claim on the
+    ///      allowance. With nothing held there is no refund to wait for — this is the
+    ///      whole of what a skip now costs.
+    function _release(uint256 planId, uint32 legIndex) private {
+        Schedule storage s = schedules[planId];
+        uint96 stake = _legs[planId][legIndex].stake;
+        if (s.unspent >= stake) s.unspent -= stake; else s.unspent = 0;
+        uint256 owed = outstanding[s.owner];
+        outstanding[s.owner] = owed >= stake ? owed - stake : 0;
     }
 
     function _skip(uint256 planId, uint32 legIndex, Reason r) private {
         Leg storage leg = _legs[planId][legIndex];
         // A dry run changes nothing; every other skip consumes the Leg.
         leg.state = LegState.Skipped;
+        _release(planId, legIndex);
         schedules[planId].cursor = legIndex + 1;
         emit LegSkipped(planId, legIndex, r);
     }
@@ -582,21 +664,29 @@ contract PlanBook is SomniaEventHandler {
     // Exits
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// @notice Stop future Legs and return the undeployed stake.
-    /// @dev    Must work when the chain is STALLED — no successor, gas shortfall,
-    ///         reverting handler — which is exactly when the owner most needs it.
-    ///         Nothing here depends on the handler. Settled Legs are untouched;
-    ///         still-open Legs stay redeemable via `redeemSettled`.
+    /// @notice Stop future Legs. There is nothing to refund — see the note below.
+    /// @dev    Since stakes are pulled per Leg, a cancel RELEASES the claim on the
+    ///         owner's allowance rather than returning money; the balance never left.
+    ///         `PlanCancelled.refunded` is therefore the stake this Plan will no
+    ///         longer draw, not a transfer that happened.
+    ///
+    ///         Still works when the chain is STALLED — no successor, gas shortfall,
+    ///         reverting handler. Nothing here depends on the handler. Settled Legs
+    ///         are untouched; still-open Legs stay redeemable via `redeemSettled`.
     function cancelPlan(uint256 planId) external {
         Schedule storage s = schedules[planId];
         if (s.owner == address(0)) revert NoPlan();
         if (msg.sender != s.owner && msg.sender != owner) revert NotOwner();
 
         s.live = false;
-        uint96 refund = s.unspent;
+        uint96 released = s.unspent;
         s.unspent = 0;
-        if (refund > 0) COLLATERAL.transfer(s.owner, refund);
-        emit PlanCancelled(planId, refund);
+        uint256 owed = outstanding[s.owner];
+        outstanding[s.owner] = owed >= released ? owed - released : 0;
+        // NOTHING IS TRANSFERRED, because nothing was ever taken. `released` is the
+        // stake this Plan will now never draw — the owner's balance did not move
+        // when they committed and does not move now.
+        emit PlanCancelled(planId, released);
         _maybeCloseSeries(s.marketCreator, s.seriesId);
     }
 

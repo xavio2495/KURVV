@@ -142,7 +142,27 @@ describe("Plan lifecycle", () => {
     assert.equal(sch[4], 0n, "all stake deployed");
   });
 
-  it("cancels mid-chain and refunds the FULL unspent stake", async () => {
+  it("commits WITHOUT taking the stake: only the Leg that opened costs anything", async () => {
+    const { book, usdc, user } = await setup();
+    const stakes = [400_000n, 600_000n];
+    const before = await usdc.read.balanceOf([user.account.address]);
+
+    await usdc.write.approve([book.address, 1_000_000n], { account: user.account });
+    await book.write.commitPlan([commitParams(mid(1), CREATOR), [0, 0], stakes], { account: user.account });
+
+    const spent = before - (await usdc.read.balanceOf([user.account.address]));
+    assert.ok(spent > 0n, "Leg 0 opened, so something was spent");
+    assert.ok(spent <= 400_000n, `only Leg 0's stake may be drawn, not the total — drew ${spent}`);
+
+    // The contract must not be sitting on change: lot rounding leaves some, and
+    // holding it would rebuild the custody this design removes.
+    assert.equal(await usdc.read.balanceOf([book.address]), 0n, "PlanBook must hold NO collateral at rest");
+
+    // Leg 1's stake is still the owner's, and still claimable via the allowance.
+    assert.equal(await book.read.outstanding([user.account.address]), 600_000n, "only Leg 1 remains outstanding");
+  });
+
+  it("cancels mid-chain: nothing to refund, because nothing was taken", async () => {
     const { book, usdc, user } = await setup();
     await usdc.write.approve([book.address, 1_000_000n], { account: user.account });
     await book.write.commitPlan([commitParams(mid(1), CREATOR), [0, 0], [400_000n, 600_000n]], { account: user.account });
@@ -151,10 +171,53 @@ describe("Plan lifecycle", () => {
     await book.write.cancelPlan([0n], { account: user.account });
     const after = await usdc.read.balanceOf([user.account.address]);
 
-    assert.equal(after - before, 600_000n, "the undeployed Leg's stake must come back in full");
+    assert.equal(after, before, "cancel moves no money — the stake never left the owner");
     const sch = await book.read.schedules([0n]);
     assert.equal(sch[3], false, "plan should not be live");
     assert.equal(sch[4], 0n, "unspent must be zeroed");
+    assert.equal(await book.read.outstanding([user.account.address]), 0n, "the claim on the allowance is released");
+  });
+
+  it("a Leg the owner cannot fund is SKIPPED, and the Plan carries on", async () => {
+    const { book, usdc, user } = await setup();
+    await usdc.write.approve([book.address, 1_000_000n], { account: user.account });
+    await book.write.commitPlan([commitParams(mid(1), CREATOR), [0, 0], [400_000n, 600_000n]], { account: user.account });
+
+    // The owner takes the allowance away mid-Plan — the cost of holding no custody.
+    await usdc.write.approve([book.address, 0n], { account: user.account });
+    const before = await usdc.read.balanceOf([user.account.address]);
+
+    await fire(book, CREATOR, [ROLL_TOPIC, pad(toHex(SERIES), { size: 32 }), mid(2), pad("0x01", { size: 32 })]);
+    await fire(book, PRECOMPILE, [SCHEDULE_TOPIC, pad(toHex(1), { size: 32 })]);
+
+    const leg1 = await book.read.getLeg([0n, 1]);
+    assert.equal(leg1.state, 3, "Leg 1 must be Skipped, not Open");
+    assert.equal(await usdc.read.balanceOf([user.account.address]), before, "a skipped Leg costs nothing");
+    assert.equal(await usdc.read.balanceOf([book.address]), 0n, "and leaves nothing behind in the contract");
+
+    const skips = await book.getEvents.LegSkipped();
+    assert.ok(skips.some((e: any) => e.args.reason === 15), "the reason must be StakeUnavailable (15)");
+  });
+
+  it("a second Plan must approve its own total PLUS what the first still needs", async () => {
+    const { book, usdc, user } = await setup();
+    await usdc.write.approve([book.address, 1_000_000n], { account: user.account });
+    await book.write.commitPlan([commitParams(mid(1), CREATOR), [0, 0], [400_000n, 600_000n]], { account: user.account });
+    assert.equal(await book.read.outstanding([user.account.address]), 600_000n);
+
+    // `approve` OVERWRITES. Approving only the new Plan's total would quietly hand
+    // Plan 0's remaining Leg the new Plan's money.
+    await usdc.write.approve([book.address, 500_000n], { account: user.account });
+    await assert.rejects(
+      book.write.commitPlan([commitParams(mid(1), CREATOR), [0], [500_000n]], { account: user.account }),
+      /ApprovalMustBeExact|reverted/,
+      "an allowance that ignores the live Plan must be rejected",
+    );
+
+    // 500_000 for the new Plan + 600_000 still owed to the old one.
+    await usdc.write.approve([book.address, 1_100_000n], { account: user.account });
+    await book.write.commitPlan([commitParams(mid(1), CREATOR), [0], [500_000n]], { account: user.account });
+    assert.equal((await book.read.getLeg([1n, 0])).state, 1, "the second Plan's Leg 0 opens");
   });
 
   it("redeems a settled Leg on a DEAD plan and pays the owner", async () => {
