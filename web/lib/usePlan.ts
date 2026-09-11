@@ -347,7 +347,7 @@ export function usePlan(venue: Venue): PlanState {
     if (curve.length < 2) { setErr("Draw a curve first."); return; }
     try {
       setBusy("Finding the live Window…");
-      const built = await buildCommit(toPoints(curve), v, legCount, total);
+      const built = await buildCommit(toPoints(curve), v, legCount, total, PLAN_BOOK, local.address);
       await send(built, v, total, { curve, legCount });
       // Shown once the commit's own status clears. Null on every venue measured
       // so far — see `feeNotice`; it exists so a fee that appears is visible
@@ -373,7 +373,7 @@ export function usePlan(venue: Venue): PlanState {
     if (!legs.length) { setErr("Paint at least one cell first."); return; }
     try {
       setBusy("Finding the live Window…");
-      const built = await buildCommitFromLegs(legs, v, total);
+      const built = await buildCommitFromLegs(legs, v, total, PLAN_BOOK, local.address);
       await send(built, v, total, { curve: [], legCount: legs.length, cells });
       if (built.feeNotice) setErr(built.feeNotice);
     } catch (e) {
@@ -384,7 +384,7 @@ export function usePlan(venue: Venue): PlanState {
 
   const cancel = useCallback(async () => {
     if (planId === null || !PLAN_BOOK) return;
-    setErr(null); setBusy("Cancelling — returning unspent stake…");
+    setErr(null); setBusy("Cancelling — stopping the remaining rounds…");
     try {
       const h = await local.send({
         to: PLAN_BOOK, value: 0n,

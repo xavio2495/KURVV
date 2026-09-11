@@ -540,31 +540,44 @@ a { color: inherit; text-decoration: none; }
   .demo-tip { width: min(300px, 86vw); }
 }
 
-/* ── mobile: LANDSCAPE IS THE ONLY PLAYABLE ORIENTATION ────────────────────
-   The device is a landscape object. Fitted into a portrait phone it came out
-   roughly a third of the screen wide and every control was a few pixels across —
-   visible, and not usable. A hint at the bottom was not enough, because the screen
-   behind it still looked like the app working. So portrait is BLOCKED outright. */
-.play-rotate {
-  position: fixed; inset: 0; z-index: 40; display: none;
-  flex-direction: column; align-items: center; justify-content: center; gap: 18px;
-  padding: 32px; text-align: center;
-  background: #08070e;
+/* ── mobile: ASK FOR LANDSCAPE ON THE WAY IN ───────────────────────────────
+   The device is a landscape object, and fitted into a portrait phone its controls
+   come out a few pixels across. This used to be a full-screen block on /play, which
+   told the player only after they had loaded the game. The ask now happens on the
+   landing page instead (see `RotateGate`), as a card rather than a wall: the landing
+   page is what people are linked to and it reads fine in portrait, so covering it
+   would cost every phone visitor the page to save one rotation. */
+.rotate-tip {
+  position: fixed; z-index: 60; display: none;
+  /* CLEAR OF THE FIXED NAV, which is `bottom: 8px` and ~40px tall on a phone and
+     sits at z-index 40. Overlapping it does not just look wrong: the nav swallows
+     the pointer and the dismiss button stops working, which a screenshot cannot
+     show you. Sits above it rather than fighting it for the same strip. */
+  left: 12px; right: 12px; bottom: calc(64px + env(safe-area-inset-bottom));
+  align-items: center; gap: 12px; padding: 12px 14px;
+  background: #12101c; border: 2px solid #2b2740;
+  box-shadow: 4px 4px 0 rgba(0, 0, 0, .55);
 }
-.play-rotate-icon {
-  width: 74px; height: 46px; border-radius: 8px;
+.rotate-tip-icon {
+  flex: none; width: 40px; height: 26px; border-radius: 5px;
   border: 2px solid #6b6486;
-  animation: play-rotate-turn 2.4s ease-in-out infinite;
+  animation: rotate-tip-turn 2.4s ease-in-out infinite;
 }
-@keyframes play-rotate-turn {
+@keyframes rotate-tip-turn {
   0%, 32% { transform: rotate(90deg) scale(.86); }
   58%, 100% { transform: rotate(0deg) scale(1); }
 }
-.play-rotate strong { font-size: 15px; letter-spacing: .04em; color: #e8eaed; font-weight: 600; }
-.play-rotate span { font-size: 12.5px; line-height: 1.7; color: #6b6486; max-width: 30ch; }
+.rotate-tip-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.rotate-tip strong { font-size: 13.5px; letter-spacing: .03em; color: #e8eaed; font-weight: 600; }
+.rotate-tip span { font-size: 11.5px; line-height: 1.5; color: #8b86a6; }
+.rotate-tip-x {
+  margin-left: auto; flex: none; width: 30px; height: 30px;
+  background: none; border: 0; color: #8b86a6; font-size: 20px; line-height: 1;
+  cursor: pointer;
+}
 
 @media (orientation: portrait) and (max-width: 900px) {
-  .play-rotate { display: flex; }
+  .rotate-tip { display: flex; }
   .play-keys { display: none; }
 }
 
@@ -944,8 +957,8 @@ a { color: inherit; text-decoration: none; }
  * effect, which is not a user gesture — a mobile browser may suppress the modal,
  * and it did. A tap here always counts.
  *
- * Sits BELOW `.play-rotate` (z-index 40): on a portrait phone the rotate notice is
- * the more urgent instruction, and two overlays arguing is worse than either.
+ * The portrait rotate notice now lives on the landing page instead of over this one,
+ * so nothing argues with the gate for the screen any more.
  */
 .play-gate {
   position: absolute; inset: 0; z-index: 30; display: grid; place-items: center;

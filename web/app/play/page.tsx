@@ -570,16 +570,6 @@ export default function Play() {
         </div>
       )}
 
-      {/*
-        Portrait is blocked, not hinted. See `.play-rotate` — the device is a
-        landscape object and a portrait phone renders it too small to operate.
-      */}
-      <div className="play-rotate">
-        <div className="play-rotate-icon" />
-        <strong>Turn your phone sideways</strong>
-        <span>KURVV is a landscape console. Rotate to play.</span>
-      </div>
-
       <div className="play-keys">
         <span><kbd>↑↓</kbd>move</span>
         <span><kbd>↵</kbd>select / commit</span>

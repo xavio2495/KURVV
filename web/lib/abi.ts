@@ -27,6 +27,7 @@ export const planBookAbi = [
   { name: "planCount", type: "function", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
   { name: "legCount", type: "function", stateMutability: "view", inputs: [{ name: "planId", type: "uint256" }], outputs: [{ type: "uint256" }] },
   { name: "dryRun", type: "function", stateMutability: "view", inputs: [], outputs: [{ type: "bool" }] },
+  { name: "outstanding", type: "function", stateMutability: "view", inputs: [{ name: "owner", type: "address" }], outputs: [{ type: "uint256" }] },
   { name: "getLeg", type: "function", stateMutability: "view",
     inputs: [{ name: "planId", type: "uint256" }, { name: "i", type: "uint32" }],
     outputs: [{ name: "leg", type: "tuple", components: [
@@ -70,6 +71,9 @@ export const SKIP_REASON = [
   "None", "WrongEmitter", "WrongTopic", "WrongSeries", "PlanNotLive", "PlanComplete",
   "MarketNotTrading", "WindowTooShort", "NoLiquidity", "StakeTooSmall", "DryRun",
   "OrderRejected", "PredecessorUnresolved", "NothingPending", "UnknownSchedule",
+  // Appended, never reordered — the contract's enum is indexed by position.
+  // The owner's allowance or balance could not cover this Leg when it opened.
+  "StakeUnavailable",
 ] as const;
 
 /** Just enough of the module + market to decide whether a Leg won. */

@@ -3,6 +3,7 @@ import { Morph } from "../components/landing/Morph";
 import { ModePlay } from "../components/landing/ModePlay";
 import { StageLazy } from "../components/landing/StageLazy";
 import { HScroll } from "../components/HScroll";
+import { RotateGate } from "../components/RotateGate";
 import { AT } from "../lib/landing/evolution";
 
 /**
@@ -30,7 +31,7 @@ const FOOT = (
 
 export default function Home() {
   return (
-    <HScroll panels={6} className="lp" chrome={FOOT}>
+    <HScroll panels={6} className="lp" chrome={<>{FOOT}<RotateGate /></>}>
       <header className="hs-panel lp-hero" id="top">
         <h1 className="lp-wordmark">KURVV</h1>
         <p className="lp-tag">Draw the market. The chain trades it.</p>

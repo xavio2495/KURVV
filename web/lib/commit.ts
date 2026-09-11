@@ -4,6 +4,7 @@ import { ADDR, INDEXER, type Venue } from "./venues.ts";
 import { feeNotice, resolveVenueId, venueFees, type VenueFees } from "./registry.ts";
 import { USE_SDK } from "./dreamdex/flag.ts";
 import { sideHasDepth } from "./dreamdex/book.ts";
+import { pub } from "./chain.ts";
 import { curveToPlan, type CurvePoint, type Leg } from "./curve.ts";
 import type { BatchCall } from "./wallet/types.ts";
 
@@ -267,9 +268,10 @@ export interface BuiltPlan {
  */
 export async function buildCommit(
   points: CurvePoint[], v: Venue, legCount: number, total: bigint, book: Address = PLAN_BOOK,
+  owner?: Address,
 ): Promise<BuiltPlan> {
   return buildCommitFromLegs(
-    curveToPlan(points, { legCount, totalStake: total, minWeightShare: 0.05 }), v, total, book);
+    curveToPlan(points, { legCount, totalStake: total, minWeightShare: 0.05 }), v, total, book, owner);
 }
 
 /**
@@ -281,7 +283,7 @@ export async function buildCommit(
  * one builder is what guarantees the two modes cannot drift apart.
  */
 export async function buildCommitFromLegs(
-  legs: Leg[], v: Venue, total: bigint, book: Address = PLAN_BOOK,
+  legs: Leg[], v: Venue, total: bigint, book: Address = PLAN_BOOK, owner?: Address,
 ): Promise<BuiltPlan> {
   if (!legs.length) throw new Error("a Plan needs at least one Leg");
   const sum = legs.reduce((a, l) => a + l.stake, 0n);
@@ -315,9 +317,28 @@ export async function buildCommitFromLegs(
   const notice = feeNotice(fees);
   if (notice) console.warn(`[kurvv] ${notice}`);
 
+  /**
+   * APPROVE THIS PLAN'S TOTAL **PLUS** WHAT THE OWNER'S LIVE PLANS STILL OWE.
+   *
+   * `PlanBook` no longer takes the stake at commit — each Leg pulls its own when it
+   * opens — so the allowance is the only thing a Plan can draw on, and `approve`
+   * OVERWRITES rather than adds. Approving just this total would silently strand a
+   * running Plan's remaining Legs (they would skip with `StakeUnavailable`), so the
+   * contract requires `allowance == total + outstanding(owner)` exactly and we build
+   * that here. It reads 0 for a first-time user, which is the common case.
+   */
+  let owed = 0n;
+  if (owner) {
+    try {
+      owed = await pub.readContract({
+        address: book, abi: planBookAbi, functionName: "outstanding", args: [owner],
+      }) as bigint;
+    } catch { /* a book without the getter predates custody removal; the total alone is right */ }
+  }
+
   const approve: BatchCall = {
     to: ADDR.tusdc as Address, value: 0n,
-    data: encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [book, total] }),
+    data: encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [book, total + owed] }),
   };
   const commit = (m: LiveMarket): BatchCall => ({
     to: book, value: 0n,

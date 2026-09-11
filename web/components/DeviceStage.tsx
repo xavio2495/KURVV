@@ -23,7 +23,6 @@ interface Props {
   /** Hold the device flat and still — the phone layout. See `Device3D`. */
   still?: boolean;
   idleSpin?: boolean;
-  particles?: boolean;
   priceRef?: React.RefObject<PricePoint[]>;
   legsRef?: React.RefObject<LegView[]>;
   curveRef?: React.RefObject<DrawPoint[][]>;
@@ -299,7 +298,7 @@ export function DeviceStage(p: Props) {
   return (
     <Device3D
       skin={skin}
-      fill={p.fill} freeOrbit={p.freeOrbit} idleSpin={p.idleSpin} particles={p.particles}
+      fill={p.fill} freeOrbit={p.freeOrbit} idleSpin={p.idleSpin}
       priceRef={p.priceRef} legsRef={p.legsRef} curveRef={p.curveRef} cellsRef={p.cellsRef}
       planStartRef={p.planStartRef} planId={p.planId ?? null}
       horizonSec={p.horizonSec} legCount={menu.legs} asset={ASSETS[menu.tokenIndex]}

@@ -49,7 +49,6 @@ const onChart = (p: Device3DProps) => (p.screen ?? "chart") === "chart" && p.mod
 import {
   MAIN_H, MAIN_W, drawAutonomy, drawBoard, drawControlLarge, optionAtUV, rowAtUV, type FireRow,
 } from "../lib/screen";
-import { createParticles } from "../lib/three/particles";
 import { skinIndex, type Skin } from "../lib/skins";
 import type { DrawPoint, LegView, PricePoint } from "../lib/render/types";
 
@@ -130,8 +129,6 @@ export interface Device3DProps {
   fireState?: { scanning: boolean; error: string | null; hasPlan: boolean; nextOpenSec: number | null };
   /** Drawn inside the chart screen, and hidden when the chart is not on it. */
   plan?: { direction: "UP" | "DOWN"; stake: bigint }[];
-  /** Ambient particle field behind the device, tinted by the skin. */
-  particles?: boolean;
   /** Whether the selected venue has an open Window. `null` while unknown. */
   venueLive?: boolean | null;
   /** Wallet balance and committed stake, for the play readout on the second screen. */
@@ -240,10 +237,6 @@ export function Device3D(props: Device3DProps) {
     floor.position.y = -BODY_H / 2 - 1.2;
     floor.receiveShadow = true;
     scene.add(floor);
-
-    const field = createParticles(live.current.skin);
-    field.points.visible = !!live.current.particles;
-    scene.add(field.points);
 
     const resize = () => {
       const w = wrap.clientWidth || 1;
@@ -577,10 +570,7 @@ export function Device3D(props: Device3DProps) {
         // camera the user just aimed.
         skinKey = p.skin.key;
         device.applySkin(p.skin);
-        field.applySkin(p.skin);
       }
-      field.points.visible = !!p.particles;
-      if (p.particles) field.update(dt, elapsed);
 
       // Swap exchanges what each screen carries: the settings panel takes the big
       // display, and the chart drops to the DMG in its four tones.
@@ -770,7 +760,6 @@ export function Device3D(props: Device3DProps) {
       flappy.dispose();
       chartScene.dispose();
       panelTex.dispose();
-      field.dispose();
       device.dispose();
       floor.geometry.dispose();
       (floor.material as THREE.Material).dispose();

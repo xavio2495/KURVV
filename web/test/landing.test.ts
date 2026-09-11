@@ -469,13 +469,33 @@ test("onboarding never depends on an auto-opened modal alone", async () => {
   assert.match(src, /asked\.current = true;\s*\n\s*void plan\.connect\(\);/);
 });
 
-test("the gate sits below the rotate notice", async () => {
-  // On a portrait phone "turn your device" is the more urgent instruction, and two
-  // overlays arguing is worse than either.
+test("the rotate notice asks on the LANDING page, not over the game", async () => {
+  // It used to be a full-screen block on /play, so the first a player heard of it was
+  // after loading the console. Asking on the way in means the device is already the
+  // right way up when they arrive — and the landing page must stay readable, so the
+  // notice is a dismissible card rather than a wall.
+  const home = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  assert.match(home, /<RotateGate \/>/, "the landing page must carry the rotate notice");
+
+  const play = await readFile(new URL("../app/play/page.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(play, /play-rotate/, "the game page must not block on orientation any more");
+
   const s = await css();
-  const gate = s.match(/\.play-gate \{[^}]*\}/);
-  const rotate = s.match(/\.play-rotate \{[^}]*\}/);
-  assert.ok(gate && rotate);
-  const z = (r: string) => Number(r.match(/z-index:\s*(\d+)/)?.[1] ?? 0);
-  assert.ok(z(gate[0]) < z(rotate[0]), "the gate must not cover the rotate notice");
+  assert.doesNotMatch(s, /\.play-rotate\s*\{/, "the blocking overlay's styles should be gone with it");
+  const tip = s.match(/\.rotate-tip \{[^}]*\}/);
+  assert.ok(tip, "the notice needs styles");
+  assert.match(tip[0], /display:\s*none/, "hidden until the media query asks for it");
+  assert.match(s, /@media \(orientation: portrait\)[^{]*\{[^}]*\.rotate-tip \{ display: flex; \}/,
+    "shown only on a portrait phone");
+
+  // Still a card, not a blocker: covering the page people are linked to would cost
+  // every phone visitor the whole page to save one rotation.
+  assert.doesNotMatch(tip[0], /inset:\s*0/, "the notice must not cover the landing page");
+
+  // AND CLEAR OF THE FIXED NAV. They shared the bottom strip at first, and because
+  // the nav is the higher layer it swallowed the pointer — the dismiss button was
+  // visible, styled, and completely dead. Caught by driving a real phone viewport,
+  // not by looking at it.
+  const bottom = Number(tip[0].match(/bottom:\s*calc\((\d+)px/)?.[1] ?? 0);
+  assert.ok(bottom >= 56, `the notice must clear the nav — bottom was ${bottom}px`);
 });
