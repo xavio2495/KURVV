@@ -151,9 +151,12 @@ export default function Legal() {
 
           <h3>This project</h3>
           <p>
-            KURVV&apos;s own source is published for review as part of a hackathon
-            submission. No licence has been granted for it yet, so all rights are reserved
-            by default until one is added to the repository.
+            KURVV&apos;s own source — the game, the console and the contracts — is
+            published under the{" "}
+            <a href="https://www.gnu.org/licenses/gpl-3.0.html">GNU General Public
+            License v3.0 or later</a>. The full text is in the repository&apos;s{" "}
+            <code>LICENSE</code> file, and every Solidity source carries a matching
+            SPDX header.
           </p>
 
           <h3>Artwork</h3>
