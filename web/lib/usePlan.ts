@@ -113,6 +113,9 @@ export function usePlan(venue: Venue): PlanState {
 
   const planStartRef = useRef<number | null>(null);
   const legsRef = useRef<LegView[]>([]);
+  /** Legs this session has already fired `redeemSettled` at, so a 4s poll cannot
+   *  spend gas twice on the same one. Keyed `planId:legIndex`. */
+  const redeemedRef = useRef<Set<string>>(new Set());
 
   const refreshAccount = useCallback(async () => {
     if (!local.address) return;
@@ -259,8 +262,54 @@ export function usePlan(venue: Venue): PlanState {
         // not record the outcome, and `filled` is the quantity bought at OPEN, not
         // the collateral that came back. Derive it from the market's payout VECTOR.
         const payoutOf = payoutCache();
+        // Resolution is read for OPEN Legs too, not just Settled ones — the sweep
+        // below needs to know which ones are redeemable. It costs nothing extra:
+        // `payoutCache` memoises per marketId across the whole tick.
         const vectors = await Promise.all(raw.map((l) =>
-          l.state === 2 && l.marketId !== ZERO ? payoutOf(l.marketId) : Promise.resolve(null)));
+          (l.state === 2 || l.state === 1) && l.marketId !== ZERO
+            ? payoutOf(l.marketId) : Promise.resolve(null)));
+
+        // SETTLEMENT NEEDS A NUDGE, AND THIS IS WHERE IT GETS ONE.
+        //
+        // `PlanBook._advance` tries to redeem the previous Leg exactly once, at the
+        // roll. But a Window's resolution lands in a LATER transaction than the roll
+        // that ended it, so that single attempt almost always finds the market
+        // unresolved: `_tryRedeem` returns false, the handler emits
+        // `LegSkipped(PredecessorUnresolved)` and never tries again. The Leg then
+        // sits `Open` on a market that resolved seconds later, with its proceeds
+        // stranded in outcome tokens. Measured on Plan #1: five filled Legs, all
+        // still `Open` three hours after their markets resolved.
+        //
+        // `redeemSettled` is permissionless and documented as the thing that "closes
+        // it out either way" — nothing was actually calling it. This does.
+        //
+        // The autonomy claim is unharmed: opening a Leg is still validator-driven and
+        // unsigned. Only the redeem is nudged, and because it is permissionless the
+        // nudge can come from anyone — it is not custody, and it is not a keeper for
+        // the schedule.
+        if (local.address) {
+          for (let i = 0; i < raw.length; i++) {
+            if (raw[i].state !== 1 || raw[i].marketId === ZERO || !vectors[i]) continue;
+            const key = `${planId}:${i}`;
+            if (redeemedRef.current.has(key)) continue;
+            // Claim the key BEFORE awaiting: a 4s poll can re-enter while this send
+            // is still in flight and double-spend the gas on a Leg already going.
+            redeemedRef.current.add(key);
+            try {
+              await local.send({
+                to: PLAN_BOOK, value: 0n,
+                data: encodeFunctionData({
+                  abi: planBookAbi, functionName: "redeemSettled",
+                  args: [BigInt(planId), i],
+                }),
+              });
+            } catch {
+              // Release it so a later tick retries — the usual cause is the market
+              // resolving between our read and the send, which fixes itself.
+              redeemedRef.current.delete(key);
+            }
+          }
+        }
 
         const out: LegView[] = raw.map((l, i) => {
           const anchor = planStartRef.current ?? now;
@@ -287,13 +336,14 @@ export function usePlan(venue: Venue): PlanState {
     void poll();
     const t = setInterval(poll, 4000);
     return () => { stop = true; clearInterval(t); };
-  }, [planId, venue]);
+  }, [planId, venue, local]);
 
   const reset = useCallback(() => {
     clearSaved();
     setPlanId(null); setTx(null); setLegs([]); setErr(null); setRestored(null);
     planStartRef.current = null;
     legsRef.current = [];
+    redeemedRef.current.clear();
   }, []);
 
   const faucet = useCallback(async () => {
