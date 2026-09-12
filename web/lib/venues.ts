@@ -114,12 +114,24 @@ interface Row {
 /**
  * The windows the device offers.
  *
- * 15 MINUTE IS ABSENT DELIBERATELY. The rolling venue's 900s series (s1/s2) stopped
- * rolling on 29 Aug 2026: its newest window expired twelve hours earlier and was
- * never finalised, so `liveMarket` finds nothing and every commit throws. It is a
- * testnet outage, not a retirement — the row below is kept, correct and ready. Put
- * `"15m"` back in `WINDOWS` once `Market(intervalSec: 900)` shows an unexpired row
- * again, and check that before relying on it in a demo.
+ * 60 SECOND IS ABSENT, AND 5 MINUTE MOVED CREATORS. Verified on-chain 12 Sep 2026:
+ * the `fast` creator (0xee3aff92) stopped rolling at 12:15 UTC and produced ZERO
+ * `SeriesRolled` logs over a ten-minute scan, against six from the rolling creator
+ * on the same scan. That killed both venues it carried — 60s (s3/s4) and 300s
+ * (s1/s2) — for BTC and ETH alike. The series stay registered in its contract, so
+ * dreamDEX still lists them; registered is not rolling, and the registry entry is
+ * not evidence of liveness.
+ *
+ * 5 minute therefore points at the rolling creator's own 300s pair instead. NOTE
+ * THE ASSET ORDER IS INVERTED THERE: s10 is BTC and s11 is ETH, the opposite of the
+ * odd-is-BTC convention the other rows follow. Read off `SeriesRolled` topic[2] and
+ * matched against the indexer — s10 rolled marketId 0x1b3f9 (BTC), s11 rolled
+ * 0x1b3fa (ETH). Do not infer the asset from the series number on this creator.
+ *
+ * The 900s row (s1/s2) is alive again as of this check, having stalled on 29 Aug.
+ * It is still absent from `WINDOWS` only because 8 Legs is two hours. Both dead
+ * rows are kept, correct and ready; re-offer either once it shows an unexpired
+ * `Market` row, and check that before relying on it in a demo.
  */
 const ROWS: readonly Row[] = [
   {
@@ -128,9 +140,9 @@ const ROWS: readonly Row[] = [
     series: [3, 4, null], intervalSec: 60, openDelay: 22, minHeadroom: 12,
   },
   {
-    key: "mid", shell: "fast", label: "5 minute",
+    key: "mid", shell: "rolling", label: "5 minute",
     blurb: "Eight Legs is forty minutes. The demo horizon.",
-    series: [1, 2, null], intervalSec: 300, openDelay: 22, minHeadroom: 45,
+    series: [10, 11, null], intervalSec: 300, openDelay: 22, minHeadroom: 45,
   },
   {
     key: "hour", shell: "rolling", label: "1 hour",
@@ -177,11 +189,11 @@ export const VENUES: Partial<Record<VenueKey, Venue>> = Object.fromEntries(
  * have would be a button that cannot fill, so the list is asset-scoped rather than
  * global.
  *
- * 15 MINUTE IS ABSENT for BTC and ETH — see the note on `ROWS`.
+ * 60 SECOND AND 15 MINUTE ARE ABSENT for BTC and ETH — see the note on `ROWS`.
  */
 const WINDOWS_BY_ASSET: Record<Asset, readonly { label: string; key: WindowKey }[]> = {
-  BTC: [{ label: "60s", key: "fast" }, { label: "5m", key: "mid" }, { label: "1h", key: "hour" }],
-  ETH: [{ label: "60s", key: "fast" }, { label: "5m", key: "mid" }, { label: "1h", key: "hour" }],
+  BTC: [{ label: "5m", key: "mid" }, { label: "1h", key: "hour" }],
+  ETH: [{ label: "5m", key: "mid" }, { label: "1h", key: "hour" }],
   SOMI: [{ label: "5m", key: "somi" }],
 };
 
@@ -202,7 +214,7 @@ export function venueKeyOf(windowIndex: number, assetIndex: number): VenueKey {
  * key must land somewhere real rather than crashing the page it is restoring.
  */
 export function venueOf(k: VenueKey): Venue {
-  return VENUES[k] ?? VENUES["fast-btc"]!;
+  return VENUES[k] ?? VENUES["mid-btc"]!;
 }
 
 /** CREATE3 core — identical on testnet and mainnet. Per-market addresses rotate. */
