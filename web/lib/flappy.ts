@@ -1,4 +1,5 @@
 import { INDEXER, type Venue } from "./venues.ts";
+import { rollPriceSeries } from "./dreamdex/series.ts";
 import { resolveVenueId } from "./registry.ts";
 import { type PixelCells } from "./pixel.ts";
 
@@ -62,7 +63,7 @@ export async function refSeries(v: Venue, limit = 24): Promise<RefWindow[]> {
     data?: { Market: { tradingStart: string; expiry: string; strike: string; winningOutcome: number | null; voided: boolean }[] };
   };
   const rows = d.data?.Market ?? [];
-  return rows
+  const out: RefWindow[] = rows
     .map((m): RefWindow => ({
       tradingStart: Number(m.tradingStart),
       expiry: Number(m.expiry),
@@ -71,14 +72,34 @@ export async function refSeries(v: Venue, limit = 24): Promise<RefWindow[]> {
       voided: !!m.voided,
     }))
     .reverse();
+
+  // THE INDEXER'S `strike` IS A SENTINEL ON SOME VENUES, NOT A MISSING LEVEL.
+  //
+  // A binary market resolves in one of two ways. When the question names a price
+  // ("at or above 77970.95") the level lives in `strike`. When the question is
+  // "closes at or above its OPENING price", `strike` is 0 and the real number is
+  // the opening price, which has to be fetched separately.
+  //
+  // Reading `strike` raw therefore reports "no reference" for a venue that has a
+  // perfectly good one, which disabled this whole mode the day the naming venue
+  // stopped rolling. Resolve the opening price instead of giving up.
+  if (out.length && out.every((w) => w.strike === 0)) {
+    const since = Math.min(...out.map((w) => w.tradingStart)) - 1;
+    const levels = await rollPriceSeries(v, since);
+    const byStart = new Map(levels.map((p) => [p.t, p.price]));
+    for (const w of out) w.strike = byStart.get(w.tradingStart) ?? 0;
+  }
+
+  return out;
 }
 
 /**
  * Does this venue publish a reference level?
  *
- * The rolling venue's question is "closes at or above its opening price" and its
- * `strike` is 0, so a gate there would have to be drawn at a guessed height — which
- * is exactly the lie this mode must not tell. Flappy is fast-venue only.
+ * A gate drawn at a guessed height is exactly the lie this mode must not tell, so
+ * this stays a hard gate. It is no longer venue-specific: a venue whose question is
+ * "closes at or above its opening price" reports `strike` 0, and `refSeries` now
+ * resolves that opening price rather than treating the sentinel as an absence.
  */
 export function hasReference(refs: RefWindow[]): boolean {
   return refs.some((w) => w.strike > 0);
