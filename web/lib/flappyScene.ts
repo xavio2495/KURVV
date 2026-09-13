@@ -25,7 +25,8 @@ import { loadSprite, ready } from "./sprites";
  * used as single pipes, never as pairs, and the bird being past the mouth on the
  * solid side IS the win — which is what makes "hit" and "won" the same statement.
  *
- * Every sprite is Creative Commons Zero. See `public/flappy/ATTRIBUTION.md`.
+ * Every sprite is Creative Commons Zero, attributed alongside the artwork it
+ * ships with.
  */
 
 /** Native sprite metrics, in the artwork's own pixels. */

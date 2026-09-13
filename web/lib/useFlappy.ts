@@ -26,8 +26,8 @@ import { hasPositions, type PixelCells } from "./pixel";
  * continuous flight, not a game that has to be re-launched.
  *
  * THE REPLAY IS NOT COMMITTABLE and says so on screen. A rehearsal that could be
- * mistaken for a position is exactly the confusion CLAUDE.md's dry-run rule exists
- * to prevent.
+ * mistaken for a real position is exactly the confusion the dry-run gate exists to
+ * prevent: nothing here touches a wallet, signs, or reaches the Plan contract.
  */
 
 export interface Flappy {
